@@ -25,6 +25,7 @@
 - 🚙 **Rich Drawing Tools & Templates** - Various vehicles, pedestrians, traffic lights
 - 🧲 **Snap Function** - Auto-snap to existing points and lines
 - 🔗 **Point Sharing** - Connect shapes by sharing existing points
+- 👣 **Path Footprint** - Auto-place footprints on paths with synced style, size, and orientation
 - 🎨 **Style Customization** - Set color, opacity, width, and style individually
 - 💾 **Editable Save Format** - Re-edit while preserving lane connection info
 - 🗺️ **[Lanelet2](https://github.com/fzi-forschungszentrum-informatik/Lanelet2) Support** - Import OSM format maps
@@ -104,6 +105,12 @@ Set color, opacity, width, and style individually. Change default values from th
 Double-click Linestring, Lane, or Polygon to select and edit segments (between two points). Click on a segment to add new points for fine shape adjustments.
 
 <video src="https://github.com/user-attachments/assets/97fa923f-6bfb-4bb0-86ff-ef0ebb05a9d2" width="80%" controls></video>
+
+### 👣 Path Footprint
+
+Generate footprints on a Path with the Generate button. Rectangle or any vehicle template (Sedan, Bus, Truck, etc.) can be set as footprints. Changing the style of one footprint syncs to all — color, template, opacity, and size changes are applied to every footprint simultaneously while maintaining equal intervals. Footprint orientation is automatically calculated from the Path direction, including smooth curves. The Anchor Offset slider lets you shift the reference point along the travel direction — for example, aligning to the base link or front bumper position instead of the center.
+
+<video src="https://github.com/user-attachments/assets/c6633f7d-f596-4a25-9858-93e6324835ff" width="80%" controls></video>
 
 ### 📦 Export/Import
 
