@@ -1,9 +1,16 @@
 import { useState, useEffect, useRef } from 'react'
 import { ExtensionClient } from './ExtensionClient'
-import { generateScene, ANTHROPIC_MODELS, OPENAI_MODELS } from './sceneGenerator'
+import {
+  generateScene,
+  ANTHROPIC_MODELS,
+  OPENAI_MODELS,
+  GEMINI_MODELS,
+  EXAMPLE_PROMPTS,
+} from './sceneGenerator'
+import type { ApiProvider } from './sceneGenerator'
 import type { InitPayload } from './types'
 
-// drawtonomy design tokens (matches PANEL_COLORS / PANEL_TYPOGRAPHY / PANEL_SPACING)
+// drawtonomy design tokens (matches PANEL_COLORS / PANEL_TYPOGRAPHY)
 const COLORS = {
   bgDefault: '#f4f4f5',
   bgActive: '#e0e7ff',
@@ -15,6 +22,7 @@ const COLORS = {
   borderDefault: '#e4e4e7',
   danger: '#dc2626',
   separator: '#e4e4e7',
+  success: '#16a34a',
 } as const
 
 const sectionTitleStyle: React.CSSProperties = {
@@ -53,24 +61,95 @@ const separatorStyle: React.CSSProperties = {
   margin: '8px 0',
 }
 
+const providerBtnStyle = (active: boolean): React.CSSProperties => ({
+  flex: 1,
+  padding: 4,
+  fontSize: '0.5625rem',
+  fontWeight: 500,
+  backgroundColor: active ? COLORS.bgActive : COLORS.bgDefault,
+  color: active ? COLORS.textActive : COLORS.textMuted,
+  border: 'none',
+  borderRadius: 4,
+  cursor: 'pointer',
+  transition: 'all 0.15s',
+  outline: 'none',
+})
+
+const selectStyle: React.CSSProperties = {
+  width: '100%',
+  padding: '4px 6px',
+  border: `1px solid ${COLORS.borderDefault}`,
+  borderRadius: 4,
+  fontSize: '0.625rem',
+  fontFamily: 'inherit',
+  boxSizing: 'border-box',
+  outline: 'none',
+  backgroundColor: COLORS.bgValue,
+  color: COLORS.textLabel,
+  cursor: 'pointer',
+  appearance: 'auto',
+}
+
+// Default models per provider
+const DEFAULT_MODELS: Record<ApiProvider, string> = {
+  anthropic: ANTHROPIC_MODELS[1].id, // Sonnet 4
+  openai: OPENAI_MODELS[1].id, // GPT-4o
+  gemini: GEMINI_MODELS[1].id, // Gemini 2.5 Flash
+}
+
+function getModelsForProvider(provider: ApiProvider) {
+  if (provider === 'anthropic') return ANTHROPIC_MODELS
+  if (provider === 'openai') return OPENAI_MODELS
+  return GEMINI_MODELS
+}
+
+// ─── Main Component ──────────────────────────────────────────
+
 export function SceneGeneratorUI() {
   const [client] = useState(() => new ExtensionClient('ai-scene-generator'))
   const [initPayload, setInitPayload] = useState<InitPayload | null>(null)
   const [prompt, setPrompt] = useState('')
   const [apiKey, setApiKey] = useState(() => {
-    try { return localStorage.getItem('ai-scene-gen-api-key') ?? '' } catch { return '' }
+    try {
+      return localStorage.getItem('ai-scene-gen-api-key') ?? ''
+    } catch {
+      return ''
+    }
   })
-  const [apiProvider, setApiProvider] = useState<'anthropic' | 'openai'>(() => {
-    try { return (localStorage.getItem('ai-scene-gen-provider') as 'anthropic' | 'openai') ?? 'anthropic' } catch { return 'anthropic' }
+  const [apiProvider, setApiProvider] = useState<ApiProvider>(() => {
+    try {
+      return (localStorage.getItem('ai-scene-gen-provider') as ApiProvider) ?? 'anthropic'
+    } catch {
+      return 'anthropic'
+    }
   })
   const [model, setModel] = useState(() => {
-    try { return localStorage.getItem('ai-scene-gen-model') ?? ANTHROPIC_MODELS[0].id } catch { return ANTHROPIC_MODELS[0].id }
+    try {
+      return localStorage.getItem('ai-scene-gen-model') ?? ANTHROPIC_MODELS[1].id
+    } catch {
+      return ANTHROPIC_MODELS[1].id
+    }
   })
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [log, setLog] = useState<string[]>([])
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [logExpanded, setLogExpanded] = useState(false)
+  const [showExamples, setShowExamples] = useState(false)
+  const [customModel, setCustomModel] = useState('')
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const logEndRef = useRef<HTMLDivElement>(null)
+
+  // Resolve the actual model ID to use
+  const resolvedModel = model === '__custom__' ? customModel.trim() : model
+
+  // On mount, check if the saved model is a known one — if not, treat as custom
+  useEffect(() => {
+    const known = getModelsForProvider(apiProvider)
+    if (model && model !== '__custom__' && !known.some(m => m.id === model)) {
+      setCustomModel(model)
+      setModel('__custom__')
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     client.waitForInit().then(payload => {
@@ -79,8 +158,21 @@ export function SceneGeneratorUI() {
     })
   }, [client])
 
+  // Auto-scroll log
+  useEffect(() => {
+    if (logExpanded && logEndRef.current) {
+      logEndRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [log, logExpanded])
+
   const addLog = (msg: string) => {
-    setLog(prev => [...prev.slice(-20), `${new Date().toLocaleTimeString()} ${msg}`])
+    setLog(prev => [...prev.slice(-30), `${new Date().toLocaleTimeString()} ${msg}`])
+  }
+
+  const handleProviderChange = (provider: ApiProvider) => {
+    setApiProvider(provider)
+    setModel(DEFAULT_MODELS[provider])
+    setCustomModel('')
   }
 
   const handleGenerate = async () => {
@@ -93,21 +185,25 @@ export function SceneGeneratorUI() {
     setGenerating(true)
     setError(null)
     setLogExpanded(true)
-    addLog(`Generating scene: "${prompt.slice(0, 50)}..."`)
+    addLog(`Generating: "${prompt.slice(0, 60)}..."`)
 
     try {
-      // Save API key (may fail in sandboxed iframe)
+      // Persist settings
       try {
         localStorage.setItem('ai-scene-gen-api-key', apiKey)
         localStorage.setItem('ai-scene-gen-provider', apiProvider)
-        localStorage.setItem('ai-scene-gen-model', model)
-      } catch { /* sandboxed iframe */ }
+        localStorage.setItem('ai-scene-gen-model', resolvedModel)
+      } catch {
+        /* sandboxed iframe */
+      }
 
       // Get existing shapes for context
       let existingShapes: unknown[] = []
       try {
-        existingShapes = await client.requestShapes({ types: ['lane', 'vehicle', 'pedestrian'] })
-        addLog(`Read ${existingShapes.length} existing shapes for context`)
+        existingShapes = await client.requestShapes({
+          types: ['lane', 'vehicle', 'pedestrian', 'text'],
+        })
+        addLog(`Read ${existingShapes.length} existing shapes`)
       } catch {
         addLog('Could not read existing shapes (continuing without context)')
       }
@@ -116,7 +212,7 @@ export function SceneGeneratorUI() {
       let viewport = { x: 0, y: 0, zoom: 1, width: 1200, height: 800 }
       try {
         viewport = await client.requestViewport()
-        addLog(`Viewport: ${viewport.width}x${viewport.height} at zoom ${viewport.zoom.toFixed(2)}`)
+        addLog(`Viewport: ${viewport.width}x${viewport.height} @ zoom ${viewport.zoom.toFixed(2)}`)
       } catch {
         addLog('Could not read viewport (using defaults)')
       }
@@ -126,9 +222,10 @@ export function SceneGeneratorUI() {
         prompt,
         apiKey,
         apiProvider,
-        model,
+        model: resolvedModel,
         existingShapes,
         viewport,
+        onLog: addLog,
       })
 
       addLog(`Generated ${shapes.length} shapes`)
@@ -136,59 +233,50 @@ export function SceneGeneratorUI() {
       // Send shapes to host
       client.addShapes(shapes)
       client.notify(`Generated ${shapes.length} shapes`, 'success')
-      addLog('Shapes sent to canvas')
+      addLog('Shapes sent to canvas ✓')
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error'
       setError(msg)
-      addLog(`Error: ${msg}`)
+      addLog(`ERROR: ${msg}`)
       client.notify(`Generation failed: ${msg}`, 'error')
     } finally {
       setGenerating(false)
     }
   }
 
+  const canGenerate =
+    prompt.trim() && apiKey.trim() && resolvedModel && !generating
+  const models = getModelsForProvider(apiProvider)
+
   return (
     <div style={{ padding: 8, fontFamily: 'system-ui, -apple-system, sans-serif' }}>
-      {/* Status */}
+      {/* Connection Status */}
       {!initPayload && (
-        <div style={{
-          fontSize: '0.5625rem',
-          color: '#f59e0b',
-          backgroundColor: '#fffbeb',
-          padding: '4px 6px',
-          borderRadius: 4,
-          marginBottom: 8,
-        }}>
+        <div
+          style={{
+            fontSize: '0.5625rem',
+            color: '#f59e0b',
+            backgroundColor: '#fffbeb',
+            padding: '4px 6px',
+            borderRadius: 4,
+            marginBottom: 8,
+          }}
+        >
           Connecting to host...
         </div>
       )}
 
-      {/* Provider */}
+      {/* Provider Selection */}
       <div style={{ marginBottom: 8 }}>
         <div style={sectionTitleStyle}>PROVIDER</div>
         <div style={{ display: 'flex', gap: 4 }}>
-          {(['anthropic', 'openai'] as const).map(p => (
+          {(['anthropic', 'openai', 'gemini'] as const).map(p => (
             <button
               key={p}
-              onClick={() => {
-                setApiProvider(p)
-                setModel(p === 'anthropic' ? ANTHROPIC_MODELS[0].id : OPENAI_MODELS[0].id)
-              }}
-              style={{
-                flex: 1,
-                padding: 4,
-                fontSize: '0.5625rem',
-                fontWeight: 500,
-                backgroundColor: apiProvider === p ? COLORS.bgActive : COLORS.bgDefault,
-                color: apiProvider === p ? COLORS.textActive : COLORS.textMuted,
-                border: 'none',
-                borderRadius: 4,
-                cursor: 'pointer',
-                transition: 'all 0.15s',
-                outline: 'none',
-              }}
+              onClick={() => handleProviderChange(p)}
+              style={providerBtnStyle(apiProvider === p)}
             >
-              {p === 'anthropic' ? 'Claude' : 'GPT'}
+              {p === 'anthropic' ? 'Claude' : p === 'openai' ? 'GPT' : 'Gemini'}
             </button>
           ))}
         </div>
@@ -196,53 +284,133 @@ export function SceneGeneratorUI() {
 
       {/* API Key */}
       <div style={{ marginBottom: 8 }}>
-        <label style={labelStyle}>API Key</label>
+        <label style={labelStyle}>
+          API Key
+          <span style={{ fontSize: '0.5rem', color: COLORS.textMuted, marginLeft: 4 }}>
+            ({apiProvider === 'anthropic'
+              ? 'console.anthropic.com'
+              : apiProvider === 'openai'
+                ? 'platform.openai.com'
+                : 'aistudio.google.com'})
+          </span>
+        </label>
         <input
           type="password"
           value={apiKey}
           onChange={e => setApiKey(e.target.value)}
-          placeholder={apiProvider === 'anthropic' ? 'sk-ant-...' : 'sk-...'}
+          placeholder={
+            apiProvider === 'anthropic'
+              ? 'sk-ant-...'
+              : apiProvider === 'openai'
+                ? 'sk-...'
+                : 'AIza...'
+          }
           style={inputStyle}
         />
       </div>
 
-      {/* Model */}
+      {/* Model Selection */}
       <div style={{ marginBottom: 8 }}>
         <div style={sectionTitleStyle}>MODEL</div>
-        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-          {(apiProvider === 'anthropic' ? ANTHROPIC_MODELS : OPENAI_MODELS).map(m => (
-            <button
-              key={m.id}
-              onClick={() => setModel(m.id)}
-              style={{
-                padding: '3px 6px',
-                fontSize: '0.5625rem',
-                fontWeight: 500,
-                backgroundColor: model === m.id ? COLORS.bgActive : COLORS.bgDefault,
-                color: model === m.id ? COLORS.textActive : COLORS.textMuted,
-                border: 'none',
-                borderRadius: 4,
-                cursor: 'pointer',
-                transition: 'all 0.15s',
-                outline: 'none',
-              }}
-            >
+        <select
+          value={model}
+          onChange={e => {
+            setModel(e.target.value)
+            if (e.target.value !== '__custom__') setCustomModel('')
+          }}
+          style={selectStyle}
+        >
+          {models.map(m => (
+            <option key={m.id} value={m.id}>
               {m.label}
-            </button>
+            </option>
           ))}
-        </div>
+          <option value="__custom__">Other (custom model ID)</option>
+        </select>
+        {model === '__custom__' && (
+          <input
+            type="text"
+            value={customModel}
+            onChange={e => setCustomModel(e.target.value)}
+            placeholder="e.g. claude-sonnet-4-20250514"
+            style={{ ...inputStyle, marginTop: 4 }}
+          />
+        )}
       </div>
 
       <div style={separatorStyle} />
 
-      {/* Prompt */}
+      {/* Scene Description */}
       <div style={{ marginBottom: 8 }}>
-        <div style={sectionTitleStyle}>SCENE DESCRIPTION</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={sectionTitleStyle}>SCENE DESCRIPTION</div>
+          <button
+            onClick={() => setShowExamples(!showExamples)}
+            style={{
+              fontSize: '0.5rem',
+              color: COLORS.textActive,
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: 0,
+              marginBottom: 4,
+            }}
+          >
+            {showExamples ? 'Hide examples' : 'Show examples'}
+          </button>
+        </div>
+
+        {/* Example Prompts */}
+        {showExamples && (
+          <div style={{ marginBottom: 6 }}>
+            {EXAMPLE_PROMPTS.map((ex, i) => (
+              <button
+                key={i}
+                onClick={() => {
+                  setPrompt(ex.prompt)
+                  setShowExamples(false)
+                  textareaRef.current?.focus()
+                }}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: '4px 6px',
+                  marginBottom: 3,
+                  fontSize: '0.5625rem',
+                  backgroundColor: COLORS.bgValue,
+                  color: COLORS.textLabel,
+                  border: `1px solid ${COLORS.borderDefault}`,
+                  borderRadius: 4,
+                  cursor: 'pointer',
+                  lineHeight: 1.3,
+                  transition: 'border-color 0.15s',
+                }}
+                onMouseEnter={e =>
+                  ((e.target as HTMLElement).style.borderColor = COLORS.textActive)
+                }
+                onMouseLeave={e =>
+                  ((e.target as HTMLElement).style.borderColor = COLORS.borderDefault)
+                }
+              >
+                <strong>{ex.label}:</strong> {ex.prompt.slice(0, 80)}...
+              </button>
+            ))}
+          </div>
+        )}
+
         <textarea
           ref={textareaRef}
           value={prompt}
           onChange={e => setPrompt(e.target.value)}
-          placeholder={"Describe the traffic scene...\n\nExample: A two-lane road with two cars and a pedestrian"}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && canGenerate) {
+              handleGenerate()
+            }
+          }}
+          placeholder={
+            'Describe the traffic scene...\n\nExample: A two-lane road with two cars and a pedestrian'
+          }
           rows={4}
           style={{
             ...inputStyle,
@@ -250,48 +418,54 @@ export function SceneGeneratorUI() {
             lineHeight: 1.4,
           }}
         />
+        <div
+          style={{
+            fontSize: '0.5rem',
+            color: COLORS.textMuted,
+            marginTop: 2,
+            textAlign: 'right',
+          }}
+        >
+          {navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+Enter to generate
+        </div>
       </div>
 
-      {/* Generate button */}
+      {/* Generate Button */}
       <button
         onClick={handleGenerate}
-        disabled={generating || !prompt.trim() || !apiKey.trim()}
+        disabled={!canGenerate}
         style={{
           width: '100%',
-          padding: '5px 8px',
+          padding: '6px 8px',
           fontSize: '0.5625rem',
-          fontWeight: 500,
-          backgroundColor: generating
-            ? COLORS.bgDefault
-            : (!prompt.trim() || !apiKey.trim())
-              ? COLORS.bgDefault
-              : COLORS.bgActive,
-          color: generating
-            ? COLORS.textMuted
-            : (!prompt.trim() || !apiKey.trim())
-              ? COLORS.textMuted
-              : COLORS.textActive,
+          fontWeight: 600,
+          backgroundColor: canGenerate ? COLORS.bgActive : COLORS.bgDefault,
+          color: canGenerate ? COLORS.textActive : COLORS.textMuted,
           border: 'none',
           borderRadius: 4,
-          cursor: generating ? 'not-allowed' : (!prompt.trim() || !apiKey.trim()) ? 'default' : 'pointer',
+          cursor: canGenerate ? 'pointer' : 'not-allowed',
           transition: 'all 0.15s',
           outline: 'none',
+          letterSpacing: '0.02em',
         }}
       >
-        {generating ? 'Generating...' : 'Generate Scene'}
+        {generating ? '⟳ Generating...' : 'Generate Scene'}
       </button>
 
       {/* Error */}
       {error && (
-        <div style={{
-          marginTop: 8,
-          padding: '4px 6px',
-          backgroundColor: '#fef2f2',
-          color: COLORS.danger,
-          borderRadius: 4,
-          fontSize: '0.5625rem',
-          lineHeight: 1.4,
-        }}>
+        <div
+          style={{
+            marginTop: 8,
+            padding: '4px 6px',
+            backgroundColor: '#fef2f2',
+            color: COLORS.danger,
+            borderRadius: 4,
+            fontSize: '0.5625rem',
+            lineHeight: 1.4,
+            wordBreak: 'break-word',
+          }}
+        >
           {error}
         </div>
       )}
@@ -310,30 +484,52 @@ export function SceneGeneratorUI() {
             }}
             onClick={() => setLogExpanded(!logExpanded)}
           >
-            <span style={{
-              display: 'inline-block',
-              fontSize: '0.5rem',
-              transition: 'transform 0.15s',
-              transform: logExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
-            }}>
+            <span
+              style={{
+                display: 'inline-block',
+                fontSize: '0.5rem',
+                transition: 'transform 0.15s',
+                transform: logExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+              }}
+            >
               ▶
             </span>
             LOG ({log.length})
+            {log.some(l => l.includes('ERROR')) && (
+              <span style={{ color: COLORS.danger, fontSize: '0.5rem' }}>⚠</span>
+            )}
           </div>
           {logExpanded && (
-            <div style={{
-              fontSize: '0.5625rem',
-              color: COLORS.textMuted,
-              maxHeight: 100,
-              overflow: 'auto',
-              backgroundColor: COLORS.bgValue,
-              padding: '4px 6px',
-              borderRadius: 4,
-              lineHeight: 1.5,
-            }}>
+            <div
+              style={{
+                fontSize: '0.5625rem',
+                color: COLORS.textMuted,
+                maxHeight: 120,
+                overflow: 'auto',
+                backgroundColor: COLORS.bgValue,
+                padding: '4px 6px',
+                borderRadius: 4,
+                lineHeight: 1.5,
+                fontFamily: 'ui-monospace, monospace',
+              }}
+            >
               {log.map((entry, i) => (
-                <div key={i}>{entry}</div>
+                <div
+                  key={i}
+                  style={{
+                    color: entry.includes('ERROR')
+                      ? COLORS.danger
+                      : entry.includes('✓')
+                        ? COLORS.success
+                        : entry.includes('Warning')
+                          ? '#f59e0b'
+                          : COLORS.textMuted,
+                  }}
+                >
+                  {entry}
+                </div>
               ))}
+              <div ref={logEndRef} />
             </div>
           )}
         </div>
