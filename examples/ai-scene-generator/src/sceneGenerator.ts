@@ -6,7 +6,7 @@ import {
   createPoint,
   createLinestring,
   createLane,
-  createLaneWithBoundaries,
+
   createVehicle,
   createPedestrian,
   createText,
@@ -94,7 +94,7 @@ COORDINATE SYSTEM:
 - For horizontal roads: lanes run left-to-right with Y varying per lane
 - For vertical roads: lanes run top-to-bottom with X varying per lane
 - Typical lane width: 70–100 units
-- Typical vehicle size: w=90, h=45
+- Typical vehicle size: sedan w=30, h=56 (portrait/vertical); bus w=37, h=92; truck w=43, h=147
 
 RESPOND WITH ONLY A VALID JSON OBJECT (no markdown, no backticks, no explanation) matching this schema:
 
@@ -534,29 +534,43 @@ function buildShapesFromSpec(spec: SceneSpec, log: (msg: string) => void): BaseS
       }
 
       try {
-        const laneShapes = createLaneWithBoundaries(lane.leftPoints, lane.rightPoints, {
-          laneOptions: {
-            attributes: {
-              type: 'lanelet',
-              subtype: lane.attributes?.subtype ?? 'road',
-              speed_limit: lane.attributes?.speed_limit ?? '30',
-            },
+        const leftPointShapes = lane.leftPoints.map(pt => createPoint(pt.x, pt.y, { visible: true, osmId: 'n0' }))
+        const rightPointShapes = lane.rightPoints.map(pt => createPoint(pt.x, pt.y, { visible: true, osmId: 'n0' }))
+        const leftLs = createLinestring(0, 0, leftPointShapes.map(p => p.id))
+        const rightLs = createLinestring(0, 0, rightPointShapes.map(p => p.id))
+        const laneShape = createLane(0, 0, leftLs.id, rightLs.id, {
+          attributes: {
+            type: 'lanelet',
+            subtype: lane.attributes?.subtype ?? 'road',
+            speed_limit: lane.attributes?.speed_limit ?? '30',
           },
         })
-        shapes.push(...laneShapes)
+        shapes.push(...leftPointShapes, ...rightPointShapes, leftLs, rightLs, laneShape)
       } catch (e) {
         log(`Warning: failed to create lane: ${(e as Error).message}`)
       }
     }
   }
 
+  // Default sizes matching drawtonomy-app's shapeTemplates
+  const VEHICLE_SIZES: Record<string, { w: number; h: number }> = {
+    sedan:      { w: 30, h: 56 },
+    bus:        { w: 37, h: 92 },
+    truck:      { w: 43, h: 147 },
+    motorcycle: { w: 18, h: 36 },
+    bicycle:    { w: 18, h: 36 },
+  }
+
   // 2. Build vehicles
   if (spec.vehicles) {
     for (const v of spec.vehicles) {
+      const templateId = v.templateId ?? 'sedan'
+      const size = VEHICLE_SIZES[templateId] ?? VEHICLE_SIZES.sedan
       const veh = createVehicle(v.x, v.y, {
-        templateId: v.templateId ?? 'sedan',
+        templateId,
         color: v.color ?? 'black',
-        attributes: { type: 'vehicle', subtype: mapTemplateToSubtype(v.templateId) },
+        attributes: { type: 'vehicle', subtype: mapTemplateToSubtype(templateId) },
+        ...size,
       })
       veh.rotation = v.rotation ?? 0
       shapes.push(veh)
@@ -612,7 +626,7 @@ function buildShapesFromSpec(spec: SceneSpec, log: (msg: string) => void): BaseS
       if (!path.points || path.points.length < 2) continue
 
       // Create points
-      const pointShapes = path.points.map(p => createPoint(p.x, p.y, { visible: false }))
+      const pointShapes = path.points.map(p => createPoint(p.x, p.y, { visible: true, osmId: 'n0' }))
       shapes.push(...pointShapes)
 
       // Create linestring connecting them
