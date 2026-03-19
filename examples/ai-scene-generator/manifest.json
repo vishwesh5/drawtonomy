@@ -2,7 +2,7 @@
   "id": "ai-scene-generator",
   "name": "AI Scene Generator",
   "version": "1.1.0",
-  "description": "Generate ADAS traffic scenes from natural language prompts using AI (Claude, GPT, Gemini)",
+  "description": "Generate traffic scenes from natural language prompts using AI (Claude, GPT, Gemini)",
   "author": {
     "name": "drawtonomy"
   },
