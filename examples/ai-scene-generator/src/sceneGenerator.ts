@@ -6,7 +6,7 @@ import {
   createPoint,
   createLinestring,
   createLane,
-  createLaneWithBoundaries,
+
   createVehicle,
   createPedestrian,
   createText,
@@ -534,16 +534,18 @@ function buildShapesFromSpec(spec: SceneSpec, log: (msg: string) => void): BaseS
       }
 
       try {
-        const laneShapes = createLaneWithBoundaries(lane.leftPoints, lane.rightPoints, {
-          laneOptions: {
-            attributes: {
-              type: 'lanelet',
-              subtype: lane.attributes?.subtype ?? 'road',
-              speed_limit: lane.attributes?.speed_limit ?? '30',
-            },
+        const leftPointShapes = lane.leftPoints.map(pt => createPoint(pt.x, pt.y, { visible: true, osmId: 'n0' }))
+        const rightPointShapes = lane.rightPoints.map(pt => createPoint(pt.x, pt.y, { visible: true, osmId: 'n0' }))
+        const leftLs = createLinestring(0, 0, leftPointShapes.map(p => p.id))
+        const rightLs = createLinestring(0, 0, rightPointShapes.map(p => p.id))
+        const laneShape = createLane(0, 0, leftLs.id, rightLs.id, {
+          attributes: {
+            type: 'lanelet',
+            subtype: lane.attributes?.subtype ?? 'road',
+            speed_limit: lane.attributes?.speed_limit ?? '30',
           },
         })
-        shapes.push(...laneShapes)
+        shapes.push(...leftPointShapes, ...rightPointShapes, leftLs, rightLs, laneShape)
       } catch (e) {
         log(`Warning: failed to create lane: ${(e as Error).message}`)
       }
@@ -612,7 +614,7 @@ function buildShapesFromSpec(spec: SceneSpec, log: (msg: string) => void): BaseS
       if (!path.points || path.points.length < 2) continue
 
       // Create points
-      const pointShapes = path.points.map(p => createPoint(p.x, p.y, { visible: false }))
+      const pointShapes = path.points.map(p => createPoint(p.x, p.y, { visible: true, osmId: 'n0' }))
       shapes.push(...pointShapes)
 
       // Create linestring connecting them

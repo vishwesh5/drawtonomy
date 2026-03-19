@@ -10,9 +10,7 @@
   "capabilities": [
     "shapes:write",
     "shapes:read",
-    "snapshot:read",
     "viewport:read",
-    "selection:read",
     "ui:panel",
     "ui:notify"
   ]
