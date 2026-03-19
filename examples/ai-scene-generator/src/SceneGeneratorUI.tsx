@@ -7,7 +7,7 @@ import {
   GEMINI_MODELS,
   EXAMPLE_PROMPTS,
 } from './sceneGenerator'
-import type { ApiProvider, AnthropicModelId } from './sceneGenerator'
+import type { ApiProvider } from './sceneGenerator'
 import type { InitPayload } from './types'
 
 // drawtonomy design tokens (matches PANEL_COLORS / PANEL_TYPOGRAPHY)
@@ -75,18 +75,20 @@ const providerBtnStyle = (active: boolean): React.CSSProperties => ({
   outline: 'none',
 })
 
-const modelBtnStyle = (active: boolean): React.CSSProperties => ({
-  padding: '3px 6px',
-  fontSize: '0.5625rem',
-  fontWeight: 500,
-  backgroundColor: active ? COLORS.bgActive : COLORS.bgDefault,
-  color: active ? COLORS.textActive : COLORS.textMuted,
-  border: 'none',
+const selectStyle: React.CSSProperties = {
+  width: '100%',
+  padding: '4px 6px',
+  border: `1px solid ${COLORS.borderDefault}`,
   borderRadius: 4,
-  cursor: 'pointer',
-  transition: 'all 0.15s',
+  fontSize: '0.625rem',
+  fontFamily: 'inherit',
+  boxSizing: 'border-box',
   outline: 'none',
-})
+  backgroundColor: COLORS.bgValue,
+  color: COLORS.textLabel,
+  cursor: 'pointer',
+  appearance: 'auto',
+}
 
 // Default models per provider
 const DEFAULT_MODELS: Record<ApiProvider, string> = {
@@ -133,8 +135,21 @@ export function SceneGeneratorUI() {
   const [log, setLog] = useState<string[]>([])
   const [logExpanded, setLogExpanded] = useState(false)
   const [showExamples, setShowExamples] = useState(false)
+  const [customModel, setCustomModel] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const logEndRef = useRef<HTMLDivElement>(null)
+
+  // Resolve the actual model ID to use
+  const resolvedModel = model === '__custom__' ? customModel.trim() : model
+
+  // On mount, check if the saved model is a known one — if not, treat as custom
+  useEffect(() => {
+    const known = getModelsForProvider(apiProvider)
+    if (model && model !== '__custom__' && !known.some(m => m.id === model)) {
+      setCustomModel(model)
+      setModel('__custom__')
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     client.waitForInit().then(payload => {
@@ -157,6 +172,7 @@ export function SceneGeneratorUI() {
   const handleProviderChange = (provider: ApiProvider) => {
     setApiProvider(provider)
     setModel(DEFAULT_MODELS[provider])
+    setCustomModel('')
   }
 
   const handleGenerate = async () => {
@@ -176,7 +192,7 @@ export function SceneGeneratorUI() {
       try {
         localStorage.setItem('ai-scene-gen-api-key', apiKey)
         localStorage.setItem('ai-scene-gen-provider', apiProvider)
-        localStorage.setItem('ai-scene-gen-model', model)
+        localStorage.setItem('ai-scene-gen-model', resolvedModel)
       } catch {
         /* sandboxed iframe */
       }
@@ -206,7 +222,7 @@ export function SceneGeneratorUI() {
         prompt,
         apiKey,
         apiProvider,
-        model,
+        model: resolvedModel,
         existingShapes,
         viewport,
         onLog: addLog,
@@ -228,7 +244,8 @@ export function SceneGeneratorUI() {
     }
   }
 
-  const canGenerate = prompt.trim() && apiKey.trim() && !generating
+  const canGenerate =
+    prompt.trim() && apiKey.trim() && resolvedModel && !generating
   const models = getModelsForProvider(apiProvider)
 
   return (
@@ -295,17 +312,30 @@ export function SceneGeneratorUI() {
       {/* Model Selection */}
       <div style={{ marginBottom: 8 }}>
         <div style={sectionTitleStyle}>MODEL</div>
-        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        <select
+          value={model}
+          onChange={e => {
+            setModel(e.target.value)
+            if (e.target.value !== '__custom__') setCustomModel('')
+          }}
+          style={selectStyle}
+        >
           {models.map(m => (
-            <button
-              key={m.id}
-              onClick={() => setModel(m.id)}
-              style={modelBtnStyle(model === m.id)}
-            >
+            <option key={m.id} value={m.id}>
               {m.label}
-            </button>
+            </option>
           ))}
-        </div>
+          <option value="__custom__">Other (custom model ID)</option>
+        </select>
+        {model === '__custom__' && (
+          <input
+            type="text"
+            value={customModel}
+            onChange={e => setCustomModel(e.target.value)}
+            placeholder="e.g. claude-sonnet-4-20250514"
+            style={{ ...inputStyle, marginTop: 4 }}
+          />
+        )}
       </div>
 
       <div style={separatorStyle} />
