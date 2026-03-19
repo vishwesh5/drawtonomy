@@ -167,8 +167,8 @@ export function createVehicle(
     rotation: options?.templateId ? 0 : 0,
     zIndex: 0,
     props: {
-      w: options?.w ?? 90,
-      h: options?.h ?? 45,
+      w: options?.w ?? 30,
+      h: options?.h ?? 56,
       color: options?.color ?? 'black',
       size: options?.size ?? 'm',
       attributes: options?.attributes ?? { type: 'vehicle', subtype: 'car' },
