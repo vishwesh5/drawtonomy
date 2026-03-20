@@ -1,12 +1,13 @@
 // Scene Generator - AI API integration for generating traffic scenes
-// Improvements: enriched system prompt, Gemini support, SDK-helper post-processing,
-// robust error handling, ADAS-specific guidance
+// Supports three input modes:
+//   1. Natural language → scene spec
+//   2. OpenSCENARIO XML/DSL → scene spec (LLM extracts spatial layout)
+//   3. Natural language → OpenSCENARIO DSL (editable) → scene spec
 
 import {
   createPoint,
   createLinestring,
   createLane,
-
   createVehicle,
   createPedestrian,
   createText,
@@ -37,34 +38,103 @@ export const GEMINI_MODELS = [
 ] as const
 
 export type ApiProvider = 'anthropic' | 'openai' | 'gemini'
-export type AnthropicModelId = (typeof ANTHROPIC_MODELS)[number]['id']
-export type OpenAIModelId = (typeof OPENAI_MODELS)[number]['id']
-export type GeminiModelId = (typeof GEMINI_MODELS)[number]['id']
+export type InputMode = 'natural_language' | 'openscenario' | 'text_to_openscenario'
 
-// ─── Example prompts for ADAS scenarios ──────────────────────
+// ─── Example prompts and OpenSCENARIO samples ────────────────
 
 export const EXAMPLE_PROMPTS = [
-  {
-    label: 'Highway Lane Change',
-    prompt:
-      'A 3-lane highway going left-to-right. An ego sedan (blue) in the center lane, a truck (grey) in the right lane slightly ahead. Show a dashed path for the ego vehicle changing to the left lane.',
-  },
-  {
-    label: 'AEB Scenario',
-    prompt:
-      'A city road with 2 lanes going top-to-bottom. An ego sedan (blue) driving downward. A child pedestrian crossing from the right side. Place a red text annotation saying "Danger Zone" near the pedestrian.',
-  },
-  {
-    label: 'T-Intersection',
-    prompt:
-      'A T-intersection: a horizontal 2-lane road and a vertical road joining from below. Place a red sedan approaching from the left, an ego blue sedan coming from the bottom road, and a pedestrian crossing at the junction.',
-  },
-  {
-    label: 'Blind Spot Monitor',
-    prompt:
-      'A 3-lane highway going left-to-right. Ego sedan (blue) in the center lane. A motorcycle in the left lane positioned in the ego vehicle blind spot area. Another sedan ahead in the center lane. Add a text annotation "BSM Alert" near the motorcycle.',
-  },
+  { label: 'Highway Lane Change', prompt: 'A 3-lane highway going left-to-right. An ego sedan (blue) in the center lane, a truck (grey) in the right lane slightly ahead. Show a dashed path for the ego vehicle changing to the left lane.' },
+  { label: 'AEB Scenario', prompt: 'A city road with 2 lanes going top-to-bottom. An ego sedan (blue) driving downward. A child pedestrian crossing from the right side. Place a red text annotation saying "Danger Zone" near the pedestrian.' },
+  { label: 'T-Intersection', prompt: 'A T-intersection: a horizontal 2-lane road and a vertical road joining from below. Place a red sedan approaching from the left, an ego blue sedan coming from the bottom road, and a pedestrian crossing at the junction.' },
+  { label: 'Blind Spot Monitor', prompt: 'A 3-lane highway going left-to-right. Ego sedan (blue) in the center lane. A motorcycle in the left lane positioned in the ego vehicle blind spot area. Another sedan ahead in the center lane. Add a text annotation "BSM Alert" near the motorcycle.' },
 ] as const
+
+export const EXAMPLE_OPENSCENARIO_XML = `<?xml version="1.0" encoding="utf-8"?>
+<OpenSCENARIO>
+  <FileHeader revMajor="1" revMinor="1" date="2024-01-01" description="Cut-in scenario" author="Example"/>
+  <RoadNetwork>
+    <LogicFile filepath="highway_3lane.xodr"/>
+  </RoadNetwork>
+  <Entities>
+    <ScenarioObject name="Ego">
+      <Vehicle name="ego_sedan" vehicleCategory="car">
+        <BoundingBox><Dimensions width="2" length="5" height="1.8"/></BoundingBox>
+      </Vehicle>
+    </ScenarioObject>
+    <ScenarioObject name="TargetVehicle">
+      <Vehicle name="target_sedan" vehicleCategory="car">
+        <BoundingBox><Dimensions width="2" length="5" height="1.8"/></BoundingBox>
+      </Vehicle>
+    </ScenarioObject>
+  </Entities>
+  <Storyboard>
+    <Init>
+      <Actions>
+        <Private entityRef="Ego">
+          <PrivateAction>
+            <TeleportAction><Position><LanePosition roadId="1" laneId="-2" s="50"/></Position></TeleportAction>
+          </PrivateAction>
+          <PrivateAction>
+            <LongitudinalAction><SpeedAction><SpeedActionDynamics dynamicsShape="step"/><SpeedActionTarget><AbsoluteTargetSpeed value="30"/></SpeedActionTarget></SpeedAction></LongitudinalAction>
+          </PrivateAction>
+        </Private>
+        <Private entityRef="TargetVehicle">
+          <PrivateAction>
+            <TeleportAction><Position><LanePosition roadId="1" laneId="-3" s="80"/></Position></TeleportAction>
+          </PrivateAction>
+          <PrivateAction>
+            <LongitudinalAction><SpeedAction><SpeedActionDynamics dynamicsShape="step"/><SpeedActionTarget><AbsoluteTargetSpeed value="40"/></SpeedActionTarget></SpeedAction></LongitudinalAction>
+          </PrivateAction>
+        </Private>
+      </Actions>
+    </Init>
+    <Story name="CutInStory">
+      <Act name="CutInAct">
+        <ManeuverGroup name="CutInGroup" maximumExecutionCount="1">
+          <Actors><EntityRef entityRef="TargetVehicle"/></Actors>
+          <Maneuver name="CutInManeuver">
+            <Event name="CutInEvent" priority="overwrite">
+              <Action name="LaneChange">
+                <PrivateAction>
+                  <LateralAction>
+                    <LaneChangeAction>
+                      <LaneChangeActionDynamics dynamicsShape="sinusoidal" value="3" dynamicsDimension="time"/>
+                      <LaneChangeTarget><RelativeTargetLane entityRef="Ego" value="0"/></LaneChangeTarget>
+                    </LaneChangeAction>
+                  </LateralAction>
+                </PrivateAction>
+              </Action>
+            </Event>
+          </Maneuver>
+        </ManeuverGroup>
+      </Act>
+    </Story>
+  </Storyboard>
+</OpenSCENARIO>`
+
+export const EXAMPLE_OPENSCENARIO_DSL = `import osc.standard
+
+# Cut-in scenario: target vehicle changes into ego's lane
+scenario cut_in:
+    ego: vehicle with:
+        keep(it.category == vehicle_category!car)
+    target: vehicle with:
+        keep(it.category == vehicle_category!car)
+
+    do parallel:
+        ego.drive() with:
+            speed(speed: 30kph)
+            lane(lane: 2, at: start)
+
+        serial:
+            target.drive() with:
+                speed(speed: 40kph)
+                lane(lane: 3, at: start)
+                position(distance: 30m, ahead_of: ego, at: start)
+
+            target.drive() with:
+                lane(same_as: ego, at: end)
+                speed(speed: 40kph)`
 
 // ─── Generate Options ────────────────────────────────────────
 
@@ -73,609 +143,222 @@ interface GenerateOptions {
   apiKey: string
   apiProvider: ApiProvider
   model: string
+  inputMode: InputMode
   existingShapes: unknown[]
   viewport: { x: number; y: number; zoom: number; width: number; height: number }
   onLog?: (msg: string) => void
 }
 
-// ─── System Prompt ───────────────────────────────────────────
-// Two-stage approach: LLM returns a high-level scene spec,
-// then we use SDK helpers to construct proper drawtonomy shapes.
+// ─── System Prompts ──────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are an expert traffic scene generator for drawtonomy, a whiteboard editor for driving scenario diagrams used in ADAS (Advanced Driver Assistance Systems) development.
-
-TASK: Given a natural language description, generate a JSON scene specification. This specification will be processed by client-side code that creates the actual shapes using the drawtonomy SDK.
-
-COORDINATE SYSTEM:
-- Default canvas is ~1200 x 800 units
-- Origin (0, 0) is top-left
-- X increases rightward, Y increases downward
-- Rotation is in DEGREES (0 = default/upward for vehicles, use rotation to orient)
-- For horizontal roads: lanes run left-to-right with Y varying per lane
-- For vertical roads: lanes run top-to-bottom with X varying per lane
-- Typical lane width: 70–100 units
-- Typical vehicle size: sedan w=30, h=56 (portrait/vertical); bus w=37, h=92; truck w=43, h=147
-
-RESPOND WITH ONLY A VALID JSON OBJECT (no markdown, no backticks, no explanation) matching this schema:
-
+const SCENE_SPEC_SCHEMA = `
+RESPOND WITH ONLY A VALID JSON OBJECT (no markdown, no backticks, no explanation):
 {
-  "lanes": [
-    {
-      "leftPoints": [{"x": number, "y": number}, ...],
-      "rightPoints": [{"x": number, "y": number}, ...],
-      "attributes": { "subtype": "road"|"sidewalk"|"crosswalk", "speed_limit": "30"|"50"|"80" }
-    }
-  ],
-  "vehicles": [
-    {
-      "x": number, "y": number,
-      "rotation": number,
-      "templateId": "sedan"|"bus"|"truck"|"motorcycle"|"bicycle",
-      "color": "string",
-      "label": "string (optional, e.g. Ego, Target)"
-    }
-  ],
-  "pedestrians": [
-    {
-      "x": number, "y": number,
-      "rotation": number,
-      "templateId": "filled"|"walking"|"simple",
-      "color": "string",
-      "label": "string (optional)"
-    }
-  ],
-  "annotations": [
-    {
-      "x": number, "y": number,
-      "text": "string",
-      "color": "string",
-      "fontSize": number
-    }
-  ],
-  "paths": [
-    {
-      "points": [{"x": number, "y": number}, ...],
-      "color": "string",
-      "strokeWidth": number,
-      "dashed": true|false,
-      "arrowHead": true|false,
-      "label": "string (optional)"
-    }
-  ]
+  "lanes": [{"leftPoints": [{"x":N,"y":N},...], "rightPoints": [{"x":N,"y":N},...], "attributes": {"subtype":"road"|"sidewalk","speed_limit":"30"|"50"|"80"}}],
+  "vehicles": [{"x":N,"y":N,"rotation":N,"templateId":"sedan"|"bus"|"truck"|"motorcycle"|"bicycle","color":"string","label":"string"}],
+  "pedestrians": [{"x":N,"y":N,"rotation":N,"templateId":"filled"|"walking","color":"string","label":"string"}],
+  "annotations": [{"x":N,"y":N,"text":"string","color":"string","fontSize":N}],
+  "paths": [{"points":[{"x":N,"y":N},...],"color":"string","strokeWidth":N,"dashed":bool,"arrowHead":bool,"label":"string"}]
 }
+CANVAS: 1200x800, origin top-left, X→right, Y→down. Rotation in DEGREES (0=up,90=right,180=down,270=left). Lane width ~80 units. Center scene around x:300-900, y:100-700.
+COLORS: ego="blue"/#2563EB, threat="red"/#EF4444, caution="#F59E0B", neutral="black"/"grey", planned paths="green", emergency="red".`
 
-COLOR CONVENTIONS FOR ADAS:
-- Ego vehicle: "blue" or "#2563EB"
-- Threat/danger: "red" or "#EF4444"
-- Caution/alert: "#F59E0B" (amber)
-- Neutral vehicles: "black" or "grey"
-- Pedestrians: "black" or "#F59E0B"
-- Paths/trajectories: "green" for planned, "red" for emergency
+const SYSTEM_PROMPT_NATURAL = `You are an expert traffic scene generator for drawtonomy (ADAS whiteboard editor). Given a natural language description, generate a JSON scene specification.
+${SCENE_SPEC_SCHEMA}
+EXAMPLE:
+{"lanes":[{"leftPoints":[{"x":50,"y":350},{"x":1150,"y":350}],"rightPoints":[{"x":50,"y":420},{"x":1150,"y":420}],"attributes":{"subtype":"road","speed_limit":"50"}},{"leftPoints":[{"x":50,"y":420},{"x":1150,"y":420}],"rightPoints":[{"x":50,"y":490},{"x":1150,"y":490}],"attributes":{"subtype":"road","speed_limit":"50"}}],"vehicles":[{"x":400,"y":385,"rotation":90,"templateId":"sedan","color":"blue","label":"Ego"}],"pedestrians":[],"annotations":[],"paths":[]}`
 
-DESIGN GUIDELINES:
-- Center the scene in the viewport (roughly around x:300-900, y:100-700)
-- For lanes, provide leftPoints and rightPoints as arrays of {x,y} coordinates that define the lane boundaries
-- Place vehicles ON the lane centerlines (between left and right boundary)
-- Lanes need at least 2 points per boundary (start and end)
-- Use rotation to orient vehicles: 0 = upward, 90 = rightward, 180 = downward, 270 = leftward
-- Keep annotations near relevant objects but not overlapping
-- For paths/trajectories, provide an array of {x,y} points along the desired route
+const SYSTEM_PROMPT_OPENSCENARIO = `You are an expert at interpreting ASAM OpenSCENARIO files (both XML .xosc and DSL .osc formats) and converting them into visual 2D diagram specifications for drawtonomy.
 
-EXAMPLE — A horizontal 2-lane road with an ego sedan:
-{
-  "lanes": [
-    {
-      "leftPoints": [{"x": 50, "y": 350}, {"x": 1150, "y": 350}],
-      "rightPoints": [{"x": 50, "y": 420}, {"x": 1150, "y": 420}],
-      "attributes": {"subtype": "road", "speed_limit": "50"}
-    },
-    {
-      "leftPoints": [{"x": 50, "y": 420}, {"x": 1150, "y": 420}],
-      "rightPoints": [{"x": 50, "y": 490}, {"x": 1150, "y": 490}],
-      "attributes": {"subtype": "road", "speed_limit": "50"}
-    }
-  ],
-  "vehicles": [
-    {"x": 400, "y": 385, "rotation": 90, "templateId": "sedan", "color": "blue", "label": "Ego"}
-  ],
-  "pedestrians": [],
-  "annotations": [],
-  "paths": []
-}`
+TASK: Extract all entities, initial positions, lane info, maneuvers/trajectories from the OpenSCENARIO input and produce a JSON scene specification for top-down visualization.
 
-// ─── Main Generate Function ──────────────────────────────────
+MAPPING RULES:
+- LanePosition(roadId, laneId, s, offset) → 2D: s maps to X proportionally (s=0→X~100, s=100→X~700), laneId to Y (lane -1→Y~350, lane -2→Y~430, lane -3→Y~510, spacing ~80 units)
+- WorldPosition(x,y) → scale to fit 1200x800 canvas
+- SpeedAction → add speed annotation label
+- LaneChangeAction → draw a dashed path with arrow from start lane to target lane
+- RelativeDistanceCondition → annotate trigger distance
+- For DSL: drive() with speed(), lane(), position() modifiers → extract positions, speeds, lane assignments
+- Color Ego blue, targets grey/red. Label all entities by name.
+- Add annotations for speeds, distances, trigger conditions mentioned in the scenario.
+${SCENE_SPEC_SCHEMA}`
+
+const SYSTEM_PROMPT_TEXT_TO_OSC = `You are an expert at writing ASAM OpenSCENARIO DSL (v2.x .osc format) for ADAS testing.
+Given a natural language description, generate a valid OpenSCENARIO DSL scenario.
+RESPOND WITH ONLY the DSL code (no markdown backticks, no explanation).
+
+RULES:
+- Start with "import osc.standard"
+- Define scenario with actors (vehicle, pedestrian)
+- Use "do parallel:" / "do serial:" for behaviors
+- Modifiers: speed(), lane(), position(), lateral(), along()
+- Constraints: "with:" + keep(it.category == ...)
+- Position: ahead_of, behind, left_of, right_of
+- Lane: lane(lane: N), lane(same_as: entity), lane(side_of: entity, side: left|right)
+- Units: kph, mph, mps, m, km, s, ms
+
+EXAMPLE:
+import osc.standard
+
+scenario cut_in:
+    ego: vehicle with:
+        keep(it.category == vehicle_category!car)
+    target: vehicle with:
+        keep(it.category == vehicle_category!car)
+    do parallel:
+        ego.drive() with:
+            speed(speed: 30kph)
+            lane(lane: 2, at: start)
+        serial:
+            target.drive() with:
+                speed(speed: 40kph)
+                lane(lane: 3, at: start)
+                position(distance: 30m, ahead_of: ego, at: start)
+            target.drive() with:
+                lane(same_as: ego, at: end)
+                speed(speed: 40kph)
+
+Use descriptive names and add comments.`
+
+// ─── Main Generate Functions ─────────────────────────────────
 
 export async function generateScene(options: GenerateOptions): Promise<BaseShape[]> {
-  const { prompt, apiKey, apiProvider, existingShapes, viewport, onLog } = options
+  const { prompt, apiKey, apiProvider, inputMode, existingShapes, viewport, onLog } = options
   const log = onLog ?? (() => {})
+  let contextInfo = existingShapes.length > 0 ? `\n\nExisting shapes: ${summarizeShapes(existingShapes)}` : ''
+  const vpInfo = `\nViewport: ${viewport.width}x${viewport.height}, zoom: ${viewport.zoom.toFixed(2)}`
 
-  // Build context about existing shapes
-  let contextInfo = ''
-  if (existingShapes.length > 0) {
-    const summary = summarizeShapes(existingShapes)
-    contextInfo = `\n\nExisting shapes on canvas for reference (place new shapes relative to these):\n${summary}`
-  }
-
-  const userMessage = `${prompt}${contextInfo}\n\nViewport: ${viewport.width}x${viewport.height}, zoom: ${viewport.zoom.toFixed(2)}`
-  log(`Sending prompt to ${apiProvider} (${options.model})...`)
-
-  let responseText: string
-
-  if (apiProvider === 'anthropic') {
-    responseText = await callAnthropic(apiKey, userMessage, options.model, log)
-  } else if (apiProvider === 'openai') {
-    responseText = await callOpenAI(apiKey, userMessage, options.model, log)
+  let sys: string, usr: string
+  if (inputMode === 'openscenario') {
+    sys = SYSTEM_PROMPT_OPENSCENARIO
+    usr = `Convert this OpenSCENARIO to a drawtonomy scene specification:\n\n${prompt}${contextInfo}${vpInfo}`
+    log('Mode: OpenSCENARIO → Scene Spec')
   } else {
-    responseText = await callGemini(apiKey, userMessage, options.model, log)
+    sys = SYSTEM_PROMPT_NATURAL
+    usr = `${prompt}${contextInfo}${vpInfo}`
+    log('Mode: Natural Language → Scene Spec')
   }
-
-  log(`Got response (${responseText.length} chars), parsing...`)
-
-  // Parse high-level scene spec
-  const sceneSpec = parseSceneSpec(responseText, log)
-
-  // Convert to drawtonomy shapes using SDK helpers
+  log(`Sending to ${apiProvider} (${options.model})...`)
+  const resp = await callLLM(apiKey, apiProvider, options.model, sys, usr, log)
+  log(`Got response (${resp.length} chars), parsing...`)
+  const spec = parseSceneSpec(resp, log)
   resetIdCounter()
-  const shapes = buildShapesFromSpec(sceneSpec, log)
-
-  log(`Built ${shapes.length} drawtonomy shapes`)
+  const shapes = buildShapesFromSpec(spec, log)
+  log(`Built ${shapes.length} shapes`)
   return shapes
 }
 
-// ─── Summarize existing shapes for context ───────────────────
+export async function generateOpenScenarioDSL(options: GenerateOptions): Promise<string> {
+  const { prompt, apiKey, apiProvider, onLog } = options
+  const log = onLog ?? (() => {})
+  log('Mode: Natural Language → OpenSCENARIO DSL')
+  log(`Sending to ${apiProvider} (${options.model})...`)
+  const resp = await callLLM(apiKey, apiProvider, options.model, SYSTEM_PROMPT_TEXT_TO_OSC, prompt, log)
+  let cleaned = resp.trim()
+  const fm = cleaned.match(/```(?:osc|openscenario|python)?\s*([\s\S]*?)```/)
+  if (fm) { cleaned = fm[1].trim(); log('Stripped markdown fences') }
+  log(`Generated DSL (${cleaned.length} chars)`)
+  return cleaned
+}
+
+// ─── Unified LLM Caller ─────────────────────────────────────
+
+async function callLLM(apiKey: string, provider: ApiProvider, model: string, sys: string, usr: string, log: (m: string) => void): Promise<string> {
+  if (provider === 'anthropic') return callAnthropic(apiKey, sys, usr, model, log)
+  if (provider === 'openai') return callOpenAI(apiKey, sys, usr, model, log)
+  return callGemini(apiKey, sys, usr, model, log)
+}
 
 function summarizeShapes(shapes: unknown[]): string {
-  const typed = shapes as Array<{ type: string; x: number; y: number; props?: Record<string, unknown> }>
-  const counts: Record<string, number> = {}
-  const positions: string[] = []
-
-  for (const s of typed) {
-    counts[s.type] = (counts[s.type] || 0) + 1
-    if (['vehicle', 'pedestrian', 'lane'].includes(s.type)) {
-      positions.push(`${s.type} at (${Math.round(s.x)}, ${Math.round(s.y)})`)
-    }
-  }
-
-  const countStr = Object.entries(counts)
-    .map(([type, n]) => `${n} ${type}(s)`)
-    .join(', ')
-
-  return `${countStr}. Key positions: ${positions.slice(0, 10).join('; ')}`
+  const t = shapes as Array<{ type: string; x: number; y: number }>
+  const c: Record<string, number> = {}; const p: string[] = []
+  for (const s of t) { c[s.type] = (c[s.type] || 0) + 1; if (['vehicle', 'pedestrian', 'lane'].includes(s.type)) p.push(`${s.type}@(${Math.round(s.x)},${Math.round(s.y)})`) }
+  return `${Object.entries(c).map(([t, n]) => `${n} ${t}`).join(', ')}. ${p.slice(0, 8).join('; ')}`
 }
 
-// ─── API Callers (robust: text-first parsing) ────────────────
+// ─── API Callers ─────────────────────────────────────────────
 
-async function callAnthropic(
-  apiKey: string,
-  userMessage: string,
-  model: string,
-  log: (msg: string) => void
-): Promise<string> {
-  log('Calling Anthropic API...')
-
-  let response: Response
-  try {
-    response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: 4096,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: userMessage }],
-      }),
-    })
-  } catch (fetchErr) {
-    throw new Error(`Network error calling Anthropic: ${(fetchErr as Error).message}`)
-  }
-
-  const bodyText = await response.text()
-  log(`Response: ${response.status} (${bodyText.length} chars)`)
-
-  if (!response.ok) {
-    throw new Error(`Anthropic API error ${response.status}: ${bodyText.substring(0, 300)}`)
-  }
-
-  let data: any
-  try {
-    data = JSON.parse(bodyText)
-  } catch {
-    throw new Error(`Anthropic returned invalid JSON: ${bodyText.substring(0, 200)}`)
-  }
-
-  if (data.error) {
-    throw new Error(`Anthropic error: ${data.error.message || JSON.stringify(data.error)}`)
-  }
-
-  return data.content?.[0]?.text ?? ''
+async function callAnthropic(apiKey: string, sys: string, usr: string, model: string, log: (m: string) => void): Promise<string> {
+  log('Calling Anthropic...'); let r: Response
+  try { r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' }, body: JSON.stringify({ model, max_tokens: 4096, system: sys, messages: [{ role: 'user', content: usr }] }) }) } catch (e) { throw new Error(`Network: ${(e as Error).message}`) }
+  const b = await r.text(); log(`${r.status} (${b.length}c)`); if (!r.ok) throw new Error(`Anthropic ${r.status}: ${b.substring(0, 300)}`)
+  let d: any; try { d = JSON.parse(b) } catch { throw new Error('Invalid JSON from Anthropic') }; if (d.error) throw new Error(`Anthropic: ${d.error.message || JSON.stringify(d.error)}`); return d.content?.[0]?.text ?? ''
 }
 
-async function callOpenAI(
-  apiKey: string,
-  userMessage: string,
-  model: string,
-  log: (msg: string) => void
-): Promise<string> {
-  log('Calling OpenAI API...')
-
-  const isO3 = model.startsWith('o3')
-  const tokenParam = isO3 ? { max_completion_tokens: 4096 } : { max_tokens: 4096 }
-
-  let response: Response
-  try {
-    response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        ...tokenParam,
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: userMessage },
-        ],
-      }),
-    })
-  } catch (fetchErr) {
-    throw new Error(`Network error calling OpenAI: ${(fetchErr as Error).message}`)
-  }
-
-  const bodyText = await response.text()
-  log(`Response: ${response.status} (${bodyText.length} chars)`)
-
-  if (!response.ok) {
-    throw new Error(`OpenAI API error ${response.status}: ${bodyText.substring(0, 300)}`)
-  }
-
-  let data: any
-  try {
-    data = JSON.parse(bodyText)
-  } catch {
-    throw new Error(`OpenAI returned invalid JSON: ${bodyText.substring(0, 200)}`)
-  }
-
-  if (data.error) {
-    throw new Error(`OpenAI error: ${data.error.message}`)
-  }
-
-  return data.choices?.[0]?.message?.content ?? ''
+async function callOpenAI(apiKey: string, sys: string, usr: string, model: string, log: (m: string) => void): Promise<string> {
+  log('Calling OpenAI...'); const tp = model.startsWith('o3') ? { max_completion_tokens: 4096 } : { max_tokens: 4096 }; let r: Response
+  try { r = await fetch('https://api.openai.com/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` }, body: JSON.stringify({ model, ...tp, messages: [{ role: 'system', content: sys }, { role: 'user', content: usr }] }) }) } catch (e) { throw new Error(`Network: ${(e as Error).message}`) }
+  const b = await r.text(); log(`${r.status} (${b.length}c)`); if (!r.ok) throw new Error(`OpenAI ${r.status}: ${b.substring(0, 300)}`)
+  let d: any; try { d = JSON.parse(b) } catch { throw new Error('Invalid JSON from OpenAI') }; if (d.error) throw new Error(`OpenAI: ${d.error.message}`); return d.choices?.[0]?.message?.content ?? ''
 }
 
-async function callGemini(
-  apiKey: string,
-  userMessage: string,
-  model: string,
-  log: (msg: string) => void
-): Promise<string> {
-  log('Calling Gemini API...')
-
-  let response: Response
-  try {
-    response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-          contents: [{ parts: [{ text: userMessage }] }],
-          generationConfig: { temperature: 0.3 },
-        }),
-      }
-    )
-  } catch (fetchErr) {
-    throw new Error(`Network error calling Gemini: ${(fetchErr as Error).message}`)
-  }
-
-  const bodyText = await response.text()
-  log(`Response: ${response.status} (${bodyText.length} chars)`)
-
-  if (!response.ok) {
-    throw new Error(`Gemini API error ${response.status}: ${bodyText.substring(0, 300)}`)
-  }
-
-  let data: any
-  try {
-    data = JSON.parse(bodyText)
-  } catch {
-    throw new Error(`Gemini returned invalid JSON: ${bodyText.substring(0, 200)}`)
-  }
-
-  if (data.error) {
-    throw new Error(`Gemini error: ${data.error.message}`)
-  }
-
-  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
+async function callGemini(apiKey: string, sys: string, usr: string, model: string, log: (m: string) => void): Promise<string> {
+  log('Calling Gemini...'); let r: Response
+  try { r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ systemInstruction: { parts: [{ text: sys }] }, contents: [{ parts: [{ text: usr }] }], generationConfig: { temperature: 0.3 } }) }) } catch (e) { throw new Error(`Network: ${(e as Error).message}`) }
+  const b = await r.text(); log(`${r.status} (${b.length}c)`); if (!r.ok) throw new Error(`Gemini ${r.status}: ${b.substring(0, 300)}`)
+  let d: any; try { d = JSON.parse(b) } catch { throw new Error('Invalid JSON from Gemini') }; if (d.error) throw new Error(`Gemini: ${d.error.message}`); return d.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
 }
 
-// ─── Parse Scene Specification ───────────────────────────────
+// ─── Parse / Build ───────────────────────────────────────────
 
 interface SceneSpec {
-  lanes?: Array<{
-    leftPoints: Array<{ x: number; y: number }>
-    rightPoints: Array<{ x: number; y: number }>
-    attributes?: { subtype?: string; speed_limit?: string }
-  }>
-  vehicles?: Array<{
-    x: number
-    y: number
-    rotation?: number
-    templateId?: string
-    color?: string
-    label?: string
-  }>
-  pedestrians?: Array<{
-    x: number
-    y: number
-    rotation?: number
-    templateId?: string
-    color?: string
-    label?: string
-  }>
-  annotations?: Array<{
-    x: number
-    y: number
-    text: string
-    color?: string
-    fontSize?: number
-  }>
-  paths?: Array<{
-    points: Array<{ x: number; y: number }>
-    color?: string
-    strokeWidth?: number
-    dashed?: boolean
-    arrowHead?: boolean
-    label?: string
-  }>
+  lanes?: Array<{ leftPoints: Array<{ x: number; y: number }>; rightPoints: Array<{ x: number; y: number }>; attributes?: { subtype?: string; speed_limit?: string } }>
+  vehicles?: Array<{ x: number; y: number; rotation?: number; templateId?: string; color?: string; label?: string }>
+  pedestrians?: Array<{ x: number; y: number; rotation?: number; templateId?: string; color?: string; label?: string }>
+  annotations?: Array<{ x: number; y: number; text: string; color?: string; fontSize?: number }>
+  paths?: Array<{ points: Array<{ x: number; y: number }>; color?: string; strokeWidth?: number; dashed?: boolean; arrowHead?: boolean; label?: string }>
 }
 
-function parseSceneSpec(text: string, log: (msg: string) => void): SceneSpec {
-  let jsonStr = text.trim()
-
-  // Strip markdown code fences
-  const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/)
-  if (fenceMatch) {
-    jsonStr = fenceMatch[1].trim()
-    log('Stripped markdown code fences')
-  }
-
-  // If it starts with '[', the LLM returned raw shapes array (old format) — wrap it
-  if (jsonStr.startsWith('[')) {
-    log('Warning: LLM returned array instead of scene spec, attempting direct shape parse')
-    // Fall back to old-style direct shape parsing
-    const shapes = JSON.parse(jsonStr)
-    if (Array.isArray(shapes)) {
-      return convertRawShapesToSpec(shapes, log)
-    }
-  }
-
-  // Find JSON object
-  const objStart = jsonStr.indexOf('{')
-  const objEnd = jsonStr.lastIndexOf('}')
-  if (objStart !== -1 && objEnd > objStart) {
-    jsonStr = jsonStr.slice(objStart, objEnd + 1)
-  }
-
-  try {
-    const parsed = JSON.parse(jsonStr)
-    if (typeof parsed !== 'object' || parsed === null) {
-      throw new Error('Response is not a JSON object')
-    }
-    log(
-      `Parsed scene: ${parsed.lanes?.length ?? 0} lanes, ${parsed.vehicles?.length ?? 0} vehicles, ` +
-        `${parsed.pedestrians?.length ?? 0} peds, ${parsed.annotations?.length ?? 0} annotations, ` +
-        `${parsed.paths?.length ?? 0} paths`
-    )
-    return parsed as SceneSpec
-  } catch (e) {
-    log(`Parse error: ${(e as Error).message}`)
-    log(`Near: ${jsonStr.substring(0, 200)}...`)
-    throw new Error(`Failed to parse scene JSON: ${(e as Error).message}`)
-  }
+function parseSceneSpec(text: string, log: (m: string) => void): SceneSpec {
+  let j = text.trim()
+  const fm = j.match(/```(?:json)?\s*([\s\S]*?)```/); if (fm) { j = fm[1].trim(); log('Stripped fences') }
+  if (j.startsWith('[')) { log('Warning: array returned, converting'); try { return convertRaw(JSON.parse(j), log) } catch {} }
+  const s = j.indexOf('{'), e = j.lastIndexOf('}'); if (s !== -1 && e > s) j = j.slice(s, e + 1)
+  try { const p = JSON.parse(j); log(`Parsed: ${p.lanes?.length??0}L ${p.vehicles?.length??0}V ${p.pedestrians?.length??0}P ${p.annotations?.length??0}A ${p.paths?.length??0}paths`); return p as SceneSpec }
+  catch (err) { log(`Parse error: ${(err as Error).message}`); throw new Error(`JSON parse failed: ${(err as Error).message}`) }
 }
 
-// Fallback: if LLM returns raw drawtonomy shapes, extract what we can
-function convertRawShapesToSpec(shapes: any[], log: (msg: string) => void): SceneSpec {
-  log(`Converting ${shapes.length} raw shapes to scene spec`)
+function convertRaw(shapes: any[], log: (m: string) => void): SceneSpec {
   const spec: SceneSpec = { lanes: [], vehicles: [], pedestrians: [], annotations: [], paths: [] }
-
   for (const s of shapes) {
-    if (s.type === 'vehicle') {
-      spec.vehicles!.push({
-        x: s.x ?? 0,
-        y: s.y ?? 0,
-        rotation: s.rotation ?? 0,
-        templateId: s.props?.templateId ?? 'sedan',
-        color: s.props?.color ?? 'black',
-      })
-    } else if (s.type === 'pedestrian') {
-      spec.pedestrians!.push({
-        x: s.x ?? 0,
-        y: s.y ?? 0,
-        templateId: s.props?.templateId ?? 'filled',
-        color: s.props?.color ?? 'black',
-      })
-    } else if (s.type === 'text') {
-      spec.annotations!.push({
-        x: s.x ?? 0,
-        y: s.y ?? 0,
-        text: s.props?.text ?? '',
-        color: s.props?.color ?? 'black',
-        fontSize: s.props?.fontSize ?? 16,
-      })
-    }
+    if (s.type === 'vehicle') spec.vehicles!.push({ x: s.x??0, y: s.y??0, rotation: s.rotation??0, templateId: s.props?.templateId??'sedan', color: s.props?.color??'black' })
+    else if (s.type === 'pedestrian') spec.pedestrians!.push({ x: s.x??0, y: s.y??0, templateId: s.props?.templateId??'filled', color: s.props?.color??'black' })
+    else if (s.type === 'text') spec.annotations!.push({ x: s.x??0, y: s.y??0, text: s.props?.text??'', color: s.props?.color??'black' })
   }
   return spec
 }
 
-// ─── Build Shapes from Scene Spec ────────────────────────────
-// Uses SDK helper functions to construct valid drawtonomy shapes
+const VSZ: Record<string, { w: number; h: number }> = { sedan: { w: 30, h: 56 }, bus: { w: 37, h: 92 }, truck: { w: 43, h: 147 }, motorcycle: { w: 18, h: 36 }, bicycle: { w: 18, h: 36 } }
 
-function buildShapesFromSpec(spec: SceneSpec, log: (msg: string) => void): BaseShape[] {
-  const shapes: BaseShape[] = []
-
-  // 1. Build lanes using createLaneWithBoundaries
-  if (spec.lanes) {
-    for (const lane of spec.lanes) {
-      if (!lane.leftPoints || !lane.rightPoints) {
-        log('Warning: lane missing leftPoints or rightPoints, skipping')
-        continue
-      }
-      if (lane.leftPoints.length < 2 || lane.rightPoints.length < 2) {
-        log('Warning: lane boundary needs at least 2 points, skipping')
-        continue
-      }
-
-      try {
-        const leftPointShapes = lane.leftPoints.map(pt => createPoint(pt.x, pt.y, { visible: true, osmId: 'n0' }))
-        const rightPointShapes = lane.rightPoints.map(pt => createPoint(pt.x, pt.y, { visible: true, osmId: 'n0' }))
-        const leftLs = createLinestring(0, 0, leftPointShapes.map(p => p.id))
-        const rightLs = createLinestring(0, 0, rightPointShapes.map(p => p.id))
-        const laneShape = createLane(0, 0, leftLs.id, rightLs.id, {
-          attributes: {
-            type: 'lanelet',
-            subtype: lane.attributes?.subtype ?? 'road',
-            speed_limit: lane.attributes?.speed_limit ?? '30',
-          },
-        })
-        shapes.push(...leftPointShapes, ...rightPointShapes, leftLs, rightLs, laneShape)
-      } catch (e) {
-        log(`Warning: failed to create lane: ${(e as Error).message}`)
-      }
-    }
+function buildShapesFromSpec(spec: SceneSpec, log: (m: string) => void): BaseShape[] {
+  const S: BaseShape[] = []
+  for (const l of spec.lanes ?? []) {
+    if (!l.leftPoints?.length || l.leftPoints.length < 2 || !l.rightPoints?.length || l.rightPoints.length < 2) { log('Skip invalid lane'); continue }
+    try {
+      const lP = l.leftPoints.map(p => createPoint(p.x, p.y, { visible: true, osmId: 'n0' })); const rP = l.rightPoints.map(p => createPoint(p.x, p.y, { visible: true, osmId: 'n0' }))
+      const lL = createLinestring(0, 0, lP.map(p => p.id)); const rL = createLinestring(0, 0, rP.map(p => p.id))
+      const ln = createLane(0, 0, lL.id, rL.id, { attributes: { type: 'lanelet', subtype: l.attributes?.subtype ?? 'road', speed_limit: l.attributes?.speed_limit ?? '30' } })
+      S.push(...lP, ...rP, lL, rL, ln)
+    } catch (e) { log(`Lane error: ${(e as Error).message}`) }
   }
-
-  // Default sizes matching drawtonomy-app's shapeTemplates
-  const VEHICLE_SIZES: Record<string, { w: number; h: number }> = {
-    sedan:      { w: 30, h: 56 },
-    bus:        { w: 37, h: 92 },
-    truck:      { w: 43, h: 147 },
-    motorcycle: { w: 18, h: 36 },
-    bicycle:    { w: 18, h: 36 },
+  for (const v of spec.vehicles ?? []) {
+    const t = v.templateId ?? 'sedan'; const sz = VSZ[t] ?? VSZ.sedan
+    const vh = createVehicle(v.x, v.y, { templateId: t, color: v.color ?? 'black', attributes: { type: 'vehicle', subtype: t === 'bus' ? 'bus' : t === 'truck' ? 'truck' : t === 'motorcycle' ? 'motorcycle' : 'car' }, ...sz })
+    vh.rotation = v.rotation ?? 0; S.push(vh)
+    if (v.label) S.push(createText(v.x - 20, v.y - 40, v.label, { color: v.color ?? 'black', fontSize: 14 }))
   }
-
-  // 2. Build vehicles
-  if (spec.vehicles) {
-    for (const v of spec.vehicles) {
-      const templateId = v.templateId ?? 'sedan'
-      const size = VEHICLE_SIZES[templateId] ?? VEHICLE_SIZES.sedan
-      const veh = createVehicle(v.x, v.y, {
-        templateId,
-        color: v.color ?? 'black',
-        attributes: { type: 'vehicle', subtype: mapTemplateToSubtype(templateId) },
-        ...size,
-      })
-      veh.rotation = v.rotation ?? 0
-      shapes.push(veh)
-
-      // Add label as a text shape nearby
-      if (v.label) {
-        shapes.push(
-          createText(v.x - 20, v.y - 40, v.label, {
-            color: v.color ?? 'black',
-            fontSize: 14,
-          })
-        )
-      }
-    }
+  for (const p of spec.pedestrians ?? []) {
+    const pd = createPedestrian(p.x, p.y, { templateId: p.templateId ?? 'filled', color: p.color ?? 'black' }); pd.rotation = p.rotation ?? 0; S.push(pd)
+    if (p.label) S.push(createText(p.x - 20, p.y - 30, p.label, { color: p.color ?? 'black', fontSize: 12 }))
   }
-
-  // 3. Build pedestrians
-  if (spec.pedestrians) {
-    for (const p of spec.pedestrians) {
-      const ped = createPedestrian(p.x, p.y, {
-        templateId: p.templateId ?? 'filled',
-        color: p.color ?? 'black',
-      })
-      ped.rotation = p.rotation ?? 0
-      shapes.push(ped)
-
-      if (p.label) {
-        shapes.push(
-          createText(p.x - 20, p.y - 30, p.label, {
-            color: p.color ?? 'black',
-            fontSize: 12,
-          })
-        )
-      }
-    }
+  for (const a of spec.annotations ?? []) S.push(createText(a.x, a.y, a.text, { color: a.color ?? 'black', fontSize: a.fontSize ?? 16 }))
+  for (const pt of spec.paths ?? []) {
+    if (!pt.points || pt.points.length < 2) continue
+    const ps = pt.points.map(p => createPoint(p.x, p.y, { visible: true, osmId: 'n0' })); S.push(...ps)
+    const ls = createLinestring(0, 0, ps.map(p => p.id), { color: pt.color ?? 'green', strokeWidth: pt.strokeWidth ?? 3, attributes: { type: 'linestring', subtype: pt.dashed ? 'dashed' : 'solid' } })
+    if (pt.arrowHead !== false) { (ls.props as any).isPath = true; (ls.props as any).arrowHead = 'end'; (ls.props as any).arrowHeadSize = 15 }
+    ;(ls.props as any).opacity = 0.85; S.push(ls)
+    if (pt.label) { const m = Math.floor(pt.points.length / 2); S.push(createText(pt.points[m].x, pt.points[m].y - 15, pt.label, { color: pt.color ?? 'green', fontSize: 12 })) }
   }
-
-  // 4. Build annotations
-  if (spec.annotations) {
-    for (const a of spec.annotations) {
-      shapes.push(
-        createText(a.x, a.y, a.text, {
-          color: a.color ?? 'black',
-          fontSize: a.fontSize ?? 16,
-        })
-      )
-    }
-  }
-
-  // 5. Build paths as linestrings with arrow heads
-  if (spec.paths) {
-    for (const path of spec.paths) {
-      if (!path.points || path.points.length < 2) continue
-
-      // Create points
-      const pointShapes = path.points.map(p => createPoint(p.x, p.y, { visible: true, osmId: 'n0' }))
-      shapes.push(...pointShapes)
-
-      // Create linestring connecting them
-      const ls = createLinestring(0, 0, pointShapes.map(p => p.id), {
-        color: path.color ?? 'green',
-        strokeWidth: path.strokeWidth ?? 3,
-        attributes: {
-          type: 'linestring',
-          subtype: path.dashed ? 'dashed' : 'solid',
-        },
-      })
-
-      // Add path-specific properties
-      if (path.arrowHead !== false) {
-        ;(ls.props as any).isPath = true
-        ;(ls.props as any).arrowHead = 'end'
-        ;(ls.props as any).arrowHeadSize = 15
-      }
-      if (path.dashed) {
-        ;(ls.props as any).attributes = { type: 'linestring', subtype: 'dashed' }
-      }
-      ;(ls.props as any).opacity = 0.85
-
-      shapes.push(ls)
-
-      // Path label
-      if (path.label && path.points.length >= 2) {
-        const mid = Math.floor(path.points.length / 2)
-        shapes.push(
-          createText(path.points[mid].x, path.points[mid].y - 15, path.label, {
-            color: path.color ?? 'green',
-            fontSize: 12,
-          })
-        )
-      }
-    }
-  }
-
-  return shapes
-}
-
-function mapTemplateToSubtype(templateId?: string): string {
-  const map: Record<string, string> = {
-    sedan: 'car',
-    bus: 'bus',
-    truck: 'truck',
-    motorcycle: 'motorcycle',
-    bicycle: 'bicycle',
-    default: 'car',
-  }
-  return map[templateId ?? 'default'] ?? 'car'
+  return S
 }
