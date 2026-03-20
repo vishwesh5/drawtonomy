@@ -35,7 +35,7 @@ This downloads and serves the same app as `drawtonomy.com` locally.
 ### 2. Start the Sample Extension
 
 ```bash
-cd examples/ai-scene-generator
+cd extensions/ai-scene-generator
 npm install
 npm run dev
 # → http://localhost:3001

@@ -16,7 +16,7 @@ npm install -g @drawtonomy/dev-server
 drawtonomy-dev-server
 
 # ターミナル2: サンプルエクステンションを起動
-cd examples/ai-scene-generator
+cd extensions/ai-scene-generator
 npm install
 npm run dev
 ```
