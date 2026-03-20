@@ -210,4 +210,4 @@ Available npm packages:
 | [`@drawtonomy/sdk`](https://www.npmjs.com/package/@drawtonomy/sdk) | SDK for building extensions (ExtensionClient, shape factory functions, types) |
 | [`@drawtonomy/dev-server`](https://www.npmjs.com/package/@drawtonomy/dev-server) | Local dev server for extension development |
 
-📖 **[Extension Development Guide](docs/extensions.md)** | [日本語](docs/extensions.ja.md) | [Sample Extension](examples/ai-scene-generator/)
+📖 **[Extension Development Guide](docs/extensions.md)** | [日本語](docs/extensions.ja.md) | [Sample Extension](extensions/ai-scene-generator/)

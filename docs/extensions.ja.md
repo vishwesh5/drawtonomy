@@ -35,7 +35,7 @@ drawtonomy-dev-server
 ### 2. サンプルエクステンションを起動
 
 ```bash
-cd examples/ai-scene-generator
+cd extensions/ai-scene-generator
 npm install
 npm run dev
 # → http://localhost:3001
