@@ -3,9 +3,10 @@
   "name": "AI Scene Generator",
   "version": "1.1.0",
   "description": "Generate traffic scenes from natural language prompts using AI (Claude, GPT, Gemini)",
-  "author": {
-    "name": "drawtonomy"
-  },
+  "author": [
+    { "name": "@vishwesh5", "url": "https://github.com/vishwesh5" },
+    { "name": "@kosuke55", "url": "https://github.com/kosuke55" }
+  ],
   "entry": "./index.html",
   "capabilities": [
     "shapes:write",
