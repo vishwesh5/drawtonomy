@@ -48,7 +48,7 @@ Provide a JSON scene specification with the following structure:
 {
   "lanes": [{"leftPoints": [{"x":N,"y":N},...], "rightPoints": [{"x":N,"y":N},...], "attributes": {"subtype":"road"|"sidewalk","speed_limit":"30"|"50"|"80"}}],
   "vehicles": [{"x":N,"y":N,"rotation":N,"templateId":"sedan"|"bus"|"truck"|"motorcycle"|"bicycle","color":"string","label":"string"}],
-  "pedestrians": [{"x":N,"y":N,"rotation":N,"templateId":"filled"|"walking","color":"string","label":"string"}],
+  "pedestrians": [{"x":N,"y":N,"rotation":N,"templateId":"filled","color":"string","label":"string"}],
   "annotations": [{"x":N,"y":N,"text":"string","color":"string","fontSize":N}],
   "paths": [{"points":[{"x":N,"y":N},...],"color":"string","strokeWidth":N,"dashed":true/false,"arrowHead":true/false,"label":"string"}]
 }
