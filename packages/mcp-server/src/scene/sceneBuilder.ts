@@ -156,22 +156,35 @@ export function buildShapesFromSpec(spec: SceneSpec): BaseShape[] {
   resetIdCounter()
   const shapes: BaseShape[] = []
 
-  // Lanes
+  // Lanes — share boundary linestrings between adjacent lanes
+  const boundaryCache = new Map<string, { points: BaseShape[]; linestring: BaseShape }>()
+  function boundaryKey(pts: Array<{ x: number; y: number }>): string {
+    return pts.map(p => `${p.x},${p.y}`).join('|')
+  }
+  function getOrCreateBoundary(pts: Array<{ x: number; y: number }>) {
+    const key = boundaryKey(pts)
+    const cached = boundaryCache.get(key)
+    if (cached) return { ...cached, isNew: false }
+    const points = pts.map(p => createPoint(p.x, p.y))
+    const linestring = createLinestring(0, 0, points.map(p => p.id))
+    boundaryCache.set(key, { points, linestring })
+    return { points, linestring, isNew: true }
+  }
   for (const l of spec.lanes ?? []) {
     if (!l.leftPoints?.length || l.leftPoints.length < 2 ||
         !l.rightPoints?.length || l.rightPoints.length < 2) continue
-    const lP = l.leftPoints.map(p => createPoint(p.x, p.y))
-    const rP = l.rightPoints.map(p => createPoint(p.x, p.y))
-    const lL = createLinestring(0, 0, lP.map(p => p.id))
-    const rL = createLinestring(0, 0, rP.map(p => p.id))
-    const ln = createLane(0, 0, lL.id, rL.id, {
+    const left = getOrCreateBoundary(l.leftPoints)
+    const right = getOrCreateBoundary(l.rightPoints)
+    if (left.isNew) shapes.push(...left.points, left.linestring)
+    if (right.isNew) shapes.push(...right.points, right.linestring)
+    const ln = createLane(0, 0, left.linestring.id, right.linestring.id, {
       attributes: {
         type: 'lanelet',
         subtype: l.attributes?.subtype ?? 'road',
         speed_limit: l.attributes?.speed_limit ?? '30',
       },
     })
-    shapes.push(...lP, ...rP, lL, rL, ln)
+    shapes.push(ln)
   }
 
   // Vehicles

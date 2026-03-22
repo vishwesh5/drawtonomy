@@ -61,6 +61,7 @@ LANES: Each lane entry = one driving lane. The number of lane entries MUST match
 LABELS: Do NOT add labels or annotations unless the user explicitly requests them. Vehicle/pedestrian "label" fields and "annotations" should be omitted by default. Only add text when the user asks for specific labels or annotations.
 COLORS: ego="blue" or "#2563EB", threat="red" or "#EF4444", caution="#F59E0B", neutral="black"/"grey", planned paths="green".
 VEHICLE TEMPLATES: sedan (default, 30x56), bus (37x92), truck (43x147), motorcycle (18x36), bicycle (18x36).
-PEDESTRIAN TEMPLATES: filled (default, 22x22).`
+PEDESTRIAN TEMPLATES: filled (default, 22x22).
+PATHS: Always use the "paths" array for trajectories, planned routes, and lane change curves. Do NOT represent them as lanes or linestrings. Use at least 5-8 points per path to create smooth curves. For lane changes, use a gradual S-curve with intermediate points (not just start and end). Example lane change path: start in source lane center, ease out, cross lane boundary at midpoint, ease in, end in target lane center.`
 
 export const EDITOR_BASE_URL = 'https://drawtonomy.vercel.app'
