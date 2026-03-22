@@ -161,7 +161,8 @@ RESPOND WITH ONLY A VALID JSON OBJECT (no markdown, no backticks, no explanation
   "paths": [{"points":[{"x":N,"y":N},...],"color":"string","strokeWidth":N,"dashed":bool,"arrowHead":bool,"label":"string"}]
 }
 CANVAS: 1200x800, origin top-left, X→right, Y→down. Rotation in DEGREES (0=up,90=right,180=down,270=left). Lane width ~80 units. Center scene around x:300-900, y:100-700.
-COLORS: ego="blue"/#2563EB, threat="red"/#EF4444, caution="#F59E0B", neutral="black"/"grey", planned paths="green", emergency="red".`
+COLORS: ego="blue"/#2563EB, threat="red"/#EF4444, caution="#F59E0B", neutral="black"/"grey", planned paths="green", emergency="red".
+PATHS: Always use the "paths" array for trajectories, planned routes, and lane change curves. Do NOT represent them as lanes or linestrings. Use at least 5-8 points per path to create smooth curves. For lane changes, use a gradual S-curve with intermediate points (not just start and end). Example lane change path: start in source lane center, ease out, cross lane boundary at midpoint, ease in, end in target lane center.`
 
 const SYSTEM_PROMPT_NATURAL = `You are an expert traffic scene generator for drawtonomy (ADAS whiteboard editor). Given a natural language description, generate a JSON scene specification.
 ${SCENE_SPEC_SCHEMA}
