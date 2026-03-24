@@ -102,3 +102,23 @@ export interface ShapeTemplate {
   viewBox: { width: number; height: number }
   defaultColor?: string
 }
+
+/**
+ * Normalized placement marker on a path.
+ * t=0 means the path start and t=1 means the path end.
+ */
+export interface PathPlacementMarker {
+  id: string
+  t: number
+}
+
+/**
+ * Configuration for path footprint placement.
+ *
+ * - `count` controls automatically generated evenly spaced participants.
+ * - `manualMarkers` are extra user-placed participants (dragged along path).
+ */
+export interface PathFootprintPlacementConfig {
+  count: number
+  manualMarkers?: PathPlacementMarker[]
+}
