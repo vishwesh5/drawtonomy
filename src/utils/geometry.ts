@@ -1,12 +1,6 @@
 import { Vec } from '../core/Vec'
 import { Point } from '../core/types'
 
-export interface PathSample {
-  point: Point
-  angle: number
-  t: number
-}
-
 export function getBoundingBox(points: Point[]): {
   x: number
   y: number
@@ -100,99 +94,4 @@ export function smoothPolyline(points: Point[], iterations: number = 2): Point[]
     result = smoothed
   }
   return result
-}
-
-/**
- * Returns the total polyline length.
- */
-export function getPolylineLength(points: Point[]): number {
-  if (points.length < 2) return 0
-
-  let length = 0
-  for (let i = 0; i < points.length - 1; i++) {
-    length += Vec.distance(Vec.of(points[i].x, points[i].y), Vec.of(points[i + 1].x, points[i + 1].y))
-  }
-  return length
-}
-
-/**
- * Sample a point/orientation at normalized distance t on a polyline.
- * t is clamped to [0, 1].
- */
-export function samplePathAt(points: Point[], t: number): PathSample {
-  const clampedT = Math.max(0, Math.min(1, t))
-
-  if (points.length === 0) {
-    return { point: { x: 0, y: 0 }, angle: 0, t: clampedT }
-  }
-
-  if (points.length === 1) {
-    return { point: points[0], angle: 0, t: clampedT }
-  }
-
-  const totalLength = getPolylineLength(points)
-  if (totalLength === 0) {
-    return { point: points[0], angle: 0, t: clampedT }
-  }
-
-  const targetDistance = totalLength * clampedT
-  let traveled = 0
-
-  for (let i = 0; i < points.length - 1; i++) {
-    const a = points[i]
-    const b = points[i + 1]
-    const segmentLength = Vec.distance(Vec.of(a.x, a.y), Vec.of(b.x, b.y))
-
-    if (segmentLength === 0) continue
-
-    if (traveled + segmentLength >= targetDistance) {
-      const localT = (targetDistance - traveled) / segmentLength
-      const point = {
-        x: a.x + (b.x - a.x) * localT,
-        y: a.y + (b.y - a.y) * localT,
-      }
-      return {
-        point,
-        angle: Math.atan2(b.y - a.y, b.x - a.x),
-        t: clampedT,
-      }
-    }
-
-    traveled += segmentLength
-  }
-
-  const last = points[points.length - 1]
-  const prev = points[points.length - 2]
-  return {
-    point: last,
-    angle: Math.atan2(last.y - prev.y, last.x - prev.x),
-    t: clampedT,
-  }
-}
-
-/**
- * Build path footprint samples from both uniform auto placements and
- * extra manual markers dragged by the user.
- */
-export function buildPathFootprintSamples(
-  points: Point[],
-  autoCount: number,
-  manualTs: number[] = []
-): PathSample[] {
-  const uniformTs = autoCount <= 1
-    ? [0]
-    : Array.from({ length: autoCount }, (_, i) => i / (autoCount - 1))
-
-  const mergedTs = [...uniformTs, ...manualTs]
-    .map(t => Math.max(0, Math.min(1, t)))
-    .sort((a, b) => a - b)
-
-  const dedupedTs: number[] = []
-  for (const t of mergedTs) {
-    if (dedupedTs.length === 0 || Math.abs(dedupedTs[dedupedTs.length - 1] - t) > 1e-6) {
-      dedupedTs.push(t)
-    }
-  }
-
-  return dedupedTs.map(t => samplePathAt(points, t))
 }
