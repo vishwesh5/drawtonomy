@@ -20,6 +20,23 @@ export interface PointProps {
   osmId: string
 }
 
+// ─── NEW: Footprint entry for variable-position placement ────
+
+export interface FootprintEntry {
+  /** Unique ID for this footprint instance */
+  id: string
+  /** Parametric position [0..1] along the parent path (arc-length parameterized) */
+  t: number
+  /** Optional display label */
+  label?: string
+  /** Override the path-level vehicle/pedestrian template for this footprint */
+  templateOverride?: string
+  /** Override the path-level color for this footprint */
+  colorOverride?: string
+}
+
+// ─────────────────────────────────────────────────────────────
+
 export interface LinestringProps {
   pointIds: string[]
   color: string
@@ -32,6 +49,26 @@ export interface LinestringProps {
   arrowHeadSize?: number | null
   smooth?: boolean | null
   segments?: Record<string, { color?: string; strokeWidth?: number; opacity?: number }> | null
+
+  // ─── NEW: Variable-position footprint fields ───────────────
+  /**
+   * 'uniform' = equidistant (current default behavior)
+   * 'variable' = each footprint placed at an independent t along the path
+   */
+  footprintMode?: 'uniform' | 'variable'
+  /** Footprint count (uniform mode only) */
+  footprintCount?: number
+  /** Explicit footprint positions (variable mode) */
+  footprints?: FootprintEntry[]
+  /** Default template ID for footprints on this path */
+  footprintTemplate?: string
+  /** Default color for footprints on this path */
+  footprintColor?: string
+  /** Default opacity for footprints on this path */
+  footprintOpacity?: number
+  /** Anchor offset along travel direction in world units */
+  footprintAnchorOffset?: number
+  // ──────────────────────────────────────────────────────────
 }
 
 export interface LaneProps {
