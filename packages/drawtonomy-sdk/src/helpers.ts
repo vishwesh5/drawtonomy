@@ -10,6 +10,7 @@ import type {
   EllipseProps,
   TextProps,
   DrawtonomySnapshot,
+  FootprintEntry,
 } from './types'
 
 let idCounter = 0
@@ -108,14 +109,6 @@ export interface LaneWithBoundariesOptions {
   rightOptions?: Partial<LinestringProps> & { id?: string }
 }
 
-/**
- * Create a complete lane with its boundary linestrings and points.
- *
- * @param leftPoints - Array of {x, y} for left boundary
- * @param rightPoints - Array of {x, y} for right boundary
- * @param options - Optional configuration for lane and boundaries
- * @returns Array of shapes: points, linestrings, lane (in dependency order)
- */
 export function createLaneWithBoundaries(
   leftPoints: Array<{ x: number; y: number }>,
   rightPoints: Array<{ x: number; y: number }>,
@@ -123,7 +116,6 @@ export function createLaneWithBoundaries(
 ): BaseShape<string, any>[] {
   const shapes: BaseShape<string, any>[] = []
 
-  // Create left boundary points
   const leftPointIds: string[] = []
   for (const pt of leftPoints) {
     const point = createPoint(pt.x, pt.y)
@@ -131,7 +123,6 @@ export function createLaneWithBoundaries(
     shapes.push(point)
   }
 
-  // Create right boundary points
   const rightPointIds: string[] = []
   for (const pt of rightPoints) {
     const point = createPoint(pt.x, pt.y)
@@ -139,13 +130,11 @@ export function createLaneWithBoundaries(
     shapes.push(point)
   }
 
-  // Create linestrings
   const leftLs = createLinestring(0, 0, leftPointIds, options?.leftOptions)
   const rightLs = createLinestring(0, 0, rightPointIds, options?.rightOptions)
   shapes.push(leftLs)
   shapes.push(rightLs)
 
-  // Create lane
   const lane = createLane(0, 0, leftLs.id, rightLs.id, options?.laneOptions)
   shapes.push(lane)
 
@@ -292,4 +281,92 @@ export function createSnapshot(shapes: BaseShape[]): DrawtonomySnapshot {
     timestamp: new Date().toISOString(),
     shapes,
   }
+}
+
+// ─── NEW: Path with variable-position footprints ─────────────
+
+export interface PathWithFootprintsOptions {
+  /** 'uniform' (default) or 'variable' */
+  mode?: 'uniform' | 'variable'
+  /** Number of footprints for uniform mode (default: 5) */
+  count?: number
+  /** Explicit footprint positions for variable mode */
+  footprints?: Array<{
+    t: number
+    label?: string
+    templateOverride?: string
+    colorOverride?: string
+  }>
+  /** Default vehicle template (default: 'sedan') */
+  template?: string
+  /** Path and footprint color (default: 'green') */
+  color?: string
+  /** Path stroke width (default: 3) */
+  strokeWidth?: number
+  /** Dashed line (default: true) */
+  dashed?: boolean
+  /** Arrow at path end (default: true) */
+  arrowHead?: boolean
+  /** Anchor offset along travel direction (default: 0) */
+  anchorOffset?: number
+}
+
+/**
+ * Create a path linestring pre-configured with variable-position footprint data.
+ *
+ * The footprint entries are stored in the path's props — the host renderer
+ * reads them and creates the visual footprint shapes at render time.
+ *
+ * @returns Array of shapes: points first, then the path linestring.
+ */
+export function createPathWithFootprints(
+  pathPoints: Array<{ x: number; y: number }>,
+  options?: PathWithFootprintsOptions
+): BaseShape[] {
+  const shapes: BaseShape[] = []
+  const mode = options?.mode ?? 'uniform'
+
+  // Create path vertex points
+  const ptShapes = pathPoints.map(p => createPoint(p.x, p.y, { visible: true, osmId: 'n0' }))
+  shapes.push(...ptShapes)
+
+  // Create the path linestring
+  const pathLs = createLinestring(0, 0, ptShapes.map(p => p.id), {
+    color: options?.color ?? 'green',
+    strokeWidth: options?.strokeWidth ?? 3,
+    attributes: {
+      type: 'linestring',
+      subtype: options?.dashed !== false ? 'dashed' : 'solid',
+    },
+  })
+
+  // Set path-specific rendering props
+  const props = pathLs.props as any
+  props.isPath = true
+  if (options?.arrowHead !== false) {
+    props.arrowHead = 'end'
+    props.arrowHeadSize = 15
+  }
+  props.opacity = 0.85
+
+  // Set footprint configuration on the path
+  props.footprintMode = mode
+  props.footprintTemplate = options?.template ?? 'sedan'
+  props.footprintColor = options?.color ?? 'green'
+  props.footprintAnchorOffset = options?.anchorOffset ?? 0
+
+  if (mode === 'uniform') {
+    props.footprintCount = options?.count ?? 5
+  } else if (mode === 'variable' && options?.footprints) {
+    props.footprints = options.footprints.map((fp, i): FootprintEntry => ({
+      id: `fp_${i}_${Date.now().toString(36)}`,
+      t: fp.t,
+      label: fp.label,
+      templateOverride: fp.templateOverride,
+      colorOverride: fp.colorOverride,
+    }))
+  }
+
+  shapes.push(pathLs)
+  return shapes
 }
