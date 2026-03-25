@@ -161,8 +161,7 @@ RESPOND WITH ONLY A VALID JSON OBJECT (no markdown, no backticks, no explanation
   "paths": [{"points":[{"x":N,"y":N},...],"color":"string","strokeWidth":N,"dashed":bool,"arrowHead":bool,"label":"string"}]
 }
 CANVAS: 1200x800, origin top-left, X→right, Y→down. Rotation in DEGREES (0=up,90=right,180=down,270=left). Lane width ~80 units. Center scene around x:300-900, y:100-700.
-COLORS: ego="blue"/#2563EB, threat="red"/#EF4444, caution="#F59E0B", neutral="black"/"grey", planned paths="green", emergency="red".
-PATHS: Always use the "paths" array for trajectories, planned routes, and lane change curves. Do NOT represent them as lanes or linestrings. Use at least 5-8 points per path to create smooth curves. For lane changes, use a gradual S-curve with intermediate points (not just start and end). Example lane change path: start in source lane center, ease out, cross lane boundary at midpoint, ease in, end in target lane center.`
+COLORS: ego="blue"/#2563EB, threat="red"/#EF4444, caution="#F59E0B", neutral="black"/"grey", planned paths="green", emergency="red".`
 
 const SYSTEM_PROMPT_NATURAL = `You are an expert traffic scene generator for drawtonomy (ADAS whiteboard editor). Given a natural language description, generate a JSON scene specification.
 ${SCENE_SPEC_SCHEMA}
@@ -333,31 +332,13 @@ const VSZ: Record<string, { w: number; h: number }> = { sedan: { w: 30, h: 56 },
 
 function buildShapesFromSpec(spec: SceneSpec, log: (m: string) => void): BaseShape[] {
   const S: BaseShape[] = []
-  // Build lanes with shared boundaries for adjacent lanes
-  const lanes = spec.lanes ?? []
-  // Cache: coordinate key → { points, linestring } for boundary sharing
-  const boundaryCache = new Map<string, { points: ReturnType<typeof createPoint>[]; linestring: ReturnType<typeof createLinestring> }>()
-  function boundaryKey(pts: Array<{ x: number; y: number }>): string {
-    return pts.map(p => `${p.x},${p.y}`).join('|')
-  }
-  function getOrCreateBoundary(pts: Array<{ x: number; y: number }>) {
-    const key = boundaryKey(pts)
-    const cached = boundaryCache.get(key)
-    if (cached) return { ...cached, isNew: false }
-    const points = pts.map(p => createPoint(p.x, p.y, { visible: true, osmId: 'n0' }))
-    const linestring = createLinestring(0, 0, points.map(p => p.id))
-    boundaryCache.set(key, { points, linestring })
-    return { points, linestring, isNew: true }
-  }
-  for (const l of lanes) {
+  for (const l of spec.lanes ?? []) {
     if (!l.leftPoints?.length || l.leftPoints.length < 2 || !l.rightPoints?.length || l.rightPoints.length < 2) { log('Skip invalid lane'); continue }
     try {
-      const left = getOrCreateBoundary(l.leftPoints)
-      const right = getOrCreateBoundary(l.rightPoints)
-      if (left.isNew) { S.push(...left.points, left.linestring) }
-      if (right.isNew) { S.push(...right.points, right.linestring) }
-      const ln = createLane(0, 0, left.linestring.id, right.linestring.id, { attributes: { type: 'lanelet', subtype: l.attributes?.subtype ?? 'road', speed_limit: l.attributes?.speed_limit ?? '30' } })
-      S.push(ln)
+      const lP = l.leftPoints.map(p => createPoint(p.x, p.y, { visible: true, osmId: 'n0' })); const rP = l.rightPoints.map(p => createPoint(p.x, p.y, { visible: true, osmId: 'n0' }))
+      const lL = createLinestring(0, 0, lP.map(p => p.id)); const rL = createLinestring(0, 0, rP.map(p => p.id))
+      const ln = createLane(0, 0, lL.id, rL.id, { attributes: { type: 'lanelet', subtype: l.attributes?.subtype ?? 'road', speed_limit: l.attributes?.speed_limit ?? '30' } })
+      S.push(...lP, ...rP, lL, rL, ln)
     } catch (e) { log(`Lane error: ${(e as Error).message}`) }
   }
   for (const v of spec.vehicles ?? []) {
