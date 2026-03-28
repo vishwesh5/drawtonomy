@@ -154,6 +154,27 @@ Compatible with nav2, cartographer, gmapping, and other SLAM tools.
   <img src="./docs/images/ros-occupancy-grid-map.png" width="80%" />
 </p>
 
+### 🤖 [AI Scene Generator](extensions/ai-scene-generator/)
+
+Generate editable driving scenes on the canvas from natural language descriptions, OpenSCENARIO XML, or DSL input.
+AI automatically interprets the scenario and places lanes, vehicles, pedestrians, and other elements as fully editable shapes.
+Supports Anthropic Claude, OpenAI GPT, and Google Gemini as AI providers.
+Open from the **Extensions** button at the bottom-right of the canvas.
+
+#### Natural Language
+
+> *Prompt: "A 3-lane highway going left-to-right. An ego sedan (blue) in the center lane, a truck (grey) in the right lane slightly ahead. Show a dashed path for the ego vehicle changing to the left lane."*
+
+<video src="https://github.com/user-attachments/assets/16cb1980-c912-44f0-a606-de2b50d46287" width="80%" controls></video>
+
+#### OpenSCENARIO
+
+Generated from [ASAM OpenSCENARIO DSL - Euro NCAP scenario example](https://publications.pages.asam.net/standards/ASAM_OpenSCENARIO/ASAM_OpenSCENARIO_DSL/latest/annexes/examples.html#_euro_ncap):
+
+<video src="https://github.com/user-attachments/assets/ffcf0cff-11bf-406c-a3cb-9af49994015e" width="80%" controls></video>
+
+**Contributors:** [@vishwesh5](https://github.com/vishwesh5)
+
 ## ⌨️ Keyboard Shortcuts
 
 ### Tool Switching
