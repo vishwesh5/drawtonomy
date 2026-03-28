@@ -90,18 +90,32 @@ Add your template to the appropriate category in `manifest.json`:
 | `replaceColor` | string or null | no | Hex color to replace (null = full color mode) |
 | `defaultColor` | string | no | Default color key (default: "black") |
 
-### 4. Preview with dev-server
+### 4. Preview with template-preview extension
 
-Use `@drawtonomy/dev-server` to test your template locally:
+Use the [template-preview extension](../extensions/template-preview/) to test your template on the canvas:
 
 ```bash
-npx @drawtonomy/dev-server
+# Terminal 1: Start dev server
+drawtonomy-dev-server
+
+# Terminal 2: Start the extension
+cd extensions/template-preview
+npm install
+npm run dev
+
+# Open in browser
+open "http://localhost:3000/?ext=http://localhost:3002/manifest.json"
 ```
+
+1. Drop your SVG file into the extension panel
+2. Adjust size and color mode
+3. Click **Register on Canvas** to preview
+4. Copy the generated manifest.json entry with **Copy to Clipboard**
 
 ### 5. Submit a PR
 
 1. Place your SVG file in `templates/vehicle/` or `templates/pedestrian/`
-2. Add the entry to `manifest.json`
+2. Add the generated entry to `manifest.json`
 3. Submit a pull request
 
 ## Size Guidelines
