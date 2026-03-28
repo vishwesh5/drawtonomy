@@ -173,3 +173,7 @@ const shapes = await client.requestShapes()
 // Send notification
 client.notify('Done!', 'success')
 ```
+
+## Contributors
+
+- [@vishwesh5](https://github.com/vishwesh5)

@@ -72,3 +72,7 @@ A parking lot with 5 cars and a pedestrian walking
 - APIキーはブラウザのlocalStorageに保存される（sandboxed iframeでは保存されない）
 - 既存のキャンバスにシェイプがある場合、コンテキストとしてAIに渡される
 - 生成されたシェイプはCtrl+Z / Cmd+Zで取り消し可能
+
+## Contributors
+
+- [@vishwesh5](https://github.com/vishwesh5)
