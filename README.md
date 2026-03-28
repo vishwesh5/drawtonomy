@@ -14,7 +14,9 @@
   💬 <a href="https://github.com/kosuke55/drawtonomy/issues">Report issues / Request features</a>
 </h4>
 
-<video src="https://github.com/user-attachments/assets/714c13e7-e789-46d9-9e39-6cfed03b7a93" width="80%" controls></video>
+<p align="center">
+  <img src="./docs/videos/drawtonomy-demo.gif" width="80%" />
+</p>
 
 ## ✨ Features
 
