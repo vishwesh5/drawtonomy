@@ -30,6 +30,7 @@
 - 💾 **Editable Save Format** - Re-edit while preserving lane connection info
 - 🗺️ **[Lanelet2](https://github.com/fzi-forschungszentrum-informatik/Lanelet2) Support** - Import OSM format maps
 - 🤖 **ROS Map Support** - Import OccupancyGrid maps (.pgm + .yaml) from SLAM
+- 🤖 **[AI Scene Generator](extensions/ai-scene-generator/)** - Generate editable scenes from natural language, OpenSCENARIO XML, or DSL
 
 ## 🎯 Main Features
 
