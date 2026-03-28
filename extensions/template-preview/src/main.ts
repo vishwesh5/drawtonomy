@@ -133,23 +133,80 @@ fileInput.addEventListener('change', () => {
   if (file) loadFile(file)
 })
 
+function cropSvgToContent(rawSvg: string): { svg: string; viewBox: { width: number; height: number } } {
+  // Render SVG off-screen to get actual content bounding box
+  const container = document.createElement('div')
+  container.style.position = 'absolute'
+  container.style.left = '-9999px'
+  container.style.top = '-9999px'
+  container.innerHTML = rawSvg
+  document.body.appendChild(container)
+
+  const svgEl = container.querySelector('svg')
+  if (!svgEl) {
+    document.body.removeChild(container)
+    return { svg: rawSvg, viewBox: { width: 100, height: 100 } }
+  }
+
+  try {
+    const bbox = svgEl.getBBox()
+    if (bbox.width > 0 && bbox.height > 0) {
+      // Add small padding around content
+      const pad = Math.max(bbox.width, bbox.height) * 0.02
+      const x = bbox.x - pad
+      const y = bbox.y - pad
+      const w = bbox.width + pad * 2
+      const h = bbox.height + pad * 2
+
+      // Crop viewBox to content bounds + set preserveAspectRatio="none" for full w/h stretch
+      let cropped = rawSvg.replace(
+        /viewBox\s*=\s*"[^"]*"/,
+        `viewBox="${x} ${y} ${w} ${h}"`
+      )
+      if (/preserveAspectRatio\s*=/.test(cropped)) {
+        cropped = cropped.replace(/preserveAspectRatio\s*=\s*"[^"]*"/, 'preserveAspectRatio="none"')
+      } else {
+        cropped = cropped.replace(/<svg/, '<svg preserveAspectRatio="none"')
+      }
+      document.body.removeChild(container)
+      return { svg: cropped, viewBox: { width: w, height: h } }
+    }
+  } catch {
+    // getBBox failure
+  }
+
+  document.body.removeChild(container)
+  // Fallback: use original viewBox
+  const match = rawSvg.match(/viewBox\s*=\s*"([^"]+)"/)
+  if (match) {
+    const parts = match[1].split(/[\s,]+/).map(Number)
+    if (parts.length === 4) {
+      return { svg: rawSvg, viewBox: { width: parts[2], height: parts[3] } }
+    }
+  }
+  return { svg: rawSvg, viewBox: { width: 100, height: 100 } }
+}
+
 function loadFile(file: File) {
   const reader = new FileReader()
   reader.onload = () => {
-    svgContent = reader.result as string
+    const rawSvg = reader.result as string
     svgFilename = file.name.replace('.svg', '')
 
-    // Parse viewBox
-    const match = svgContent.match(/viewBox\s*=\s*"([^"]+)"/)
-    if (match) {
-      const parts = match[1].split(/[\s,]+/).map(Number)
-      if (parts.length === 4) {
-        svgViewBox = { width: parts[2], height: parts[3] }
-      }
-    }
-    if (!svgViewBox) {
-      svgViewBox = { width: 100, height: 100 }
-    }
+    // Crop SVG to its actual content bounds
+    const cropped = cropSvgToContent(rawSvg)
+    svgContent = cropped.svg
+    svgViewBox = cropped.viewBox
+
+    // Calculate default w/h from viewBox aspect ratio (base height = 56)
+    const baseH = 56
+    aspectRatio = svgViewBox.width / svgViewBox.height
+    const defaultW = Math.round(baseH * aspectRatio)
+    const defaultH = baseH
+    widthSlider.value = String(defaultW)
+    widthValue.textContent = String(defaultW)
+    heightSlider.value = String(defaultH)
+    heightValue.textContent = String(defaultH)
 
     // Show preview
     const blob = new Blob([svgContent], { type: 'image/svg+xml' })
@@ -168,8 +225,27 @@ function loadFile(file: File) {
 
 // --- Sliders ---
 
-widthSlider.addEventListener('input', () => { widthValue.textContent = widthSlider.value; updateManifestOutput() })
-heightSlider.addEventListener('input', () => { heightValue.textContent = heightSlider.value; updateManifestOutput() })
+const lockAspect = document.getElementById('lock-aspect') as HTMLInputElement
+let aspectRatio = 1 // w / h, updated when SVG is loaded
+
+widthSlider.addEventListener('input', () => {
+  widthValue.textContent = widthSlider.value
+  if (lockAspect.checked && aspectRatio > 0) {
+    const newH = Math.round(parseInt(widthSlider.value) / aspectRatio)
+    heightSlider.value = String(newH)
+    heightValue.textContent = String(newH)
+  }
+  updateManifestOutput()
+})
+heightSlider.addEventListener('input', () => {
+  heightValue.textContent = heightSlider.value
+  if (lockAspect.checked && aspectRatio > 0) {
+    const newW = Math.round(parseInt(heightSlider.value) * aspectRatio)
+    widthSlider.value = String(newW)
+    widthValue.textContent = String(newW)
+  }
+  updateManifestOutput()
+})
 
 // --- Color mode ---
 
