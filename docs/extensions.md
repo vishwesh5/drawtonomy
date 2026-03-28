@@ -226,6 +226,7 @@ Extensions can only use capabilities declared in their manifest. Messages for un
 | `shapes:write` | Add, update, delete shapes | AI generation, import, templates |
 | `shapes:read` | Read existing shapes | Export, analysis |
 | `snapshot:read` | Get full snapshot | Backup, conversion |
+| `snapshot:export` | Export scene (SVG/PNG/JPEG/PDF/EPS) | Video generation, screenshots |
 | `viewport:read` | Get viewport info | Position-aware placement |
 | `selection:read` | Read selection state | Process selected shapes |
 | `ui:panel` | Display iframe UI in side panel | Custom UI |
@@ -249,6 +250,7 @@ Extensions communicate with the host via `window.parent.postMessage()`.
 | `ext:shapes-delete` | `shapes:write` | Delete shapes |
 | `ext:shapes-request` | `shapes:read` | Request shape data (with filter) |
 | `ext:snapshot-request` | `snapshot:read` | Request snapshot |
+| `ext:export-request` | `snapshot:export` | Export scene (format: svg/png/jpeg/pdf/eps) |
 | `ext:viewport-request` | `viewport:read` | Request viewport info |
 | `ext:selection-request` | `selection:read` | Request selection state |
 | `ext:notify` | `ui:notify` | Show toast notification |
@@ -261,6 +263,7 @@ Extensions communicate with the host via `window.parent.postMessage()`.
 | `ext:init` | After ready, sends capability/viewport info |
 | `ext:shapes-response` | Response to shapes-request |
 | `ext:snapshot-response` | Response to snapshot-request |
+| `ext:export-response` | Response to export-request (file downloaded by host) |
 | `ext:viewport-response` | Response to viewport-request |
 | `ext:selection-response` | Response to selection-request |
 | `ext:error` | On error |
@@ -405,4 +408,6 @@ npm run dev -- --port 3001
 # Browser
 open "http://localhost:3000/?ext=http://localhost:3001/manifest.json"
 ```
+
+
 

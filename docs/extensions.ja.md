@@ -226,6 +226,7 @@ open "http://localhost:3000/?ext=http://localhost:3001/manifest.json"
 | `shapes:write` | シェイプの追加・更新・削除 | AI生成、インポート、テンプレート |
 | `shapes:read` | 既存シェイプの読み取り | エクスポート、分析 |
 | `snapshot:read` | フルスナップショットの取得 | バックアップ、変換 |
+| `snapshot:export` | シーンのエクスポート（SVG/PNG/JPEG/PDF/EPS） | 動画生成、スクリーンショット |
 | `viewport:read` | ビューポート情報の取得 | 位置を考慮した配置 |
 | `selection:read` | 選択状態の読み取り | 選択中のシェイプを処理 |
 | `ui:panel` | サイドパネルにiframe UIを表示 | カスタムUI |
@@ -249,6 +250,7 @@ open "http://localhost:3000/?ext=http://localhost:3001/manifest.json"
 | `ext:shapes-delete` | `shapes:write` | シェイプを削除 |
 | `ext:shapes-request` | `shapes:read` | シェイプデータを要求（フィルター付き） |
 | `ext:snapshot-request` | `snapshot:read` | スナップショットを要求 |
+| `ext:export-request` | `snapshot:export` | シーンをエクスポート（format: svg/png/jpeg/pdf/eps） |
 | `ext:viewport-request` | `viewport:read` | ビューポート情報を要求 |
 | `ext:selection-request` | `selection:read` | 選択状態を要求 |
 | `ext:notify` | `ui:notify` | トースト通知を表示 |
@@ -261,6 +263,7 @@ open "http://localhost:3000/?ext=http://localhost:3001/manifest.json"
 | `ext:init` | ready後、ケイパビリティ/ビューポート情報を送信 |
 | `ext:shapes-response` | shapes-requestへの応答 |
 | `ext:snapshot-response` | snapshot-requestへの応答 |
+| `ext:export-response` | export-requestへの応答（ホスト側でダウンロード実行） |
 | `ext:viewport-response` | viewport-requestへの応答 |
 | `ext:selection-response` | selection-requestへの応答 |
 | `ext:error` | エラー発生時 |
@@ -405,4 +408,6 @@ npm run dev -- --port 3001
 # ブラウザ
 open "http://localhost:3000/?ext=http://localhost:3001/manifest.json"
 ```
+
+
 

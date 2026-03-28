@@ -1,4 +1,4 @@
-# <img src="./src/client/public/logo.png" width="32" height="32" align="center" /> drawtonomy
+# <img src="./docs/images/logo.png" width="32" height="32" align="center" /> drawtonomy
 
 <h3 align="center">
   Whiteboard for Driving Diagrams 🚗

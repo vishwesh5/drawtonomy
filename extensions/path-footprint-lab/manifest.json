@@ -1,0 +1,17 @@
+{
+  "id": "path-footprint-lab",
+  "name": "Path Footprint Lab",
+  "version": "0.1.0",
+  "description": "Development tool for experimenting with variable footprint positioning on paths",
+  "author": { "name": "@kosuke55", "url": "https://github.com/kosuke55" },
+  "entry": "./index.html",
+  "capabilities": [
+    "shapes:write",
+    "shapes:read",
+    "snapshot:export",
+    "selection:read",
+    "viewport:read",
+    "ui:panel",
+    "ui:notify"
+  ]
+}

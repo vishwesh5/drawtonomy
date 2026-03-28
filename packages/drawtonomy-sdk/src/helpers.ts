@@ -11,6 +11,7 @@ import type {
   TextProps,
   DrawtonomySnapshot,
 } from './types'
+import { evaluatePathAt, uniformTValues } from './geometry'
 
 let idCounter = 0
 
@@ -282,6 +283,106 @@ export function createText(
       autoSize: options?.autoSize ?? true,
     },
   }
+}
+
+// --- Path with Footprints ---
+
+export interface PathWithFootprintsOptions {
+  /** Number of footprints for uniform spacing (default: 5) */
+  count?: number
+  /** Vehicle template (default: 'sedan') */
+  template?: string
+  /** Path and footprint color (default: 'green') */
+  color?: string
+  /** Path stroke width (default: 3) */
+  strokeWidth?: number
+  /** Dashed line (default: true) */
+  dashed?: boolean
+  /** Arrow at path end (default: true) */
+  arrowHead?: boolean
+  /** Anchor offset along travel direction (default: 0) */
+  anchorOffset?: number
+  /** Footprint opacity (default: 1) */
+  footprintOpacity?: number
+}
+
+export function createPathWithFootprints(
+  pathPoints: Array<{ x: number; y: number }>,
+  options?: PathWithFootprintsOptions
+): BaseShape<string, any>[] {
+  const shapes: BaseShape<string, any>[] = []
+  const count = options?.count ?? 5
+  const templateId = options?.template ?? 'sedan'
+  const color = options?.color ?? 'green'
+  const anchorOffset = options?.anchorOffset ?? 0
+
+  // Create path vertex points
+  const ptShapes = pathPoints.map(p => createPoint(p.x, p.y, { visible: true, osmId: '' }))
+  shapes.push(...ptShapes)
+
+  // Compute footprint positions using arc-length parameterization
+  const tValues = uniformTValues(count)
+  const footprintIds: string[] = []
+
+  // Create the path linestring
+  const pathLs = createLinestring(0, 0, ptShapes.map(p => p.id), {
+    color,
+    strokeWidth: options?.strokeWidth ?? 3,
+    attributes: {
+      type: 'linestring',
+      subtype: options?.dashed !== false ? 'dashed' : 'solid',
+    },
+    isPath: true,
+    arrowHead: options?.arrowHead !== false ? 'end' : null,
+    arrowHeadSize: 15,
+    opacity: 0.85,
+  })
+
+  // Compute interval in pixels for footprint config
+  let totalLen = 0
+  for (let i = 1; i < pathPoints.length; i++) {
+    const dx = pathPoints[i].x - pathPoints[i - 1].x
+    const dy = pathPoints[i].y - pathPoints[i - 1].y
+    totalLen += Math.sqrt(dx * dx + dy * dy)
+  }
+  const interval = count > 1 ? Math.round(totalLen / (count - 1)) : Math.round(totalLen)
+
+  // Create footprint vehicles
+  for (let i = 0; i < tValues.length; i++) {
+    const evalResult = evaluatePathAt(pathPoints, tValues[i])
+    const rotationDeg = evalResult.tangentAngleDeg
+
+    // Apply anchor offset along tangent direction
+    let fx = evalResult.position.x
+    let fy = evalResult.position.y
+    if (anchorOffset !== 0) {
+      fx -= anchorOffset * evalResult.tangentVec.x
+      fy -= anchorOffset * evalResult.tangentVec.y
+    }
+
+    const vehicle = createVehicle(fx, fy, {
+      templateId,
+      color,
+      opacity: options?.footprintOpacity ?? 1,
+      w: 30,
+      h: 56,
+    })
+    // Set rotation directly
+    ;(vehicle as any).rotation = rotationDeg
+    // Set parentPathId
+    ;(vehicle.props as any).parentPathId = pathLs.id
+
+    footprintIds.push(vehicle.id)
+    shapes.push(vehicle)
+  }
+
+  // Set footprint config on path
+  const pathProps = pathLs.props as any
+  pathProps.footprint = { interval, offset: 0, templateId, anchorOffset }
+  pathProps.footprintIds = footprintIds
+
+  shapes.push(pathLs)
+  return shapes
 }
 
 // --- Snapshot ---

@@ -82,6 +82,7 @@ https://drawtonomy.com?ext=http://localhost:3001/manifest.json
 | `deleteShapes(ids)` | `shapes:write` | シェイプを削除 |
 | `requestShapes(filter?)` | `shapes:read` | シェイプを読み取り |
 | `requestSnapshot()` | `snapshot:read` | スナップショットを取得 |
+| `exportScene(format)` | `snapshot:export` | シーンをエクスポート（svg/png/jpeg/pdf/eps） |
 | `requestViewport()` | `viewport:read` | ビューポート情報を取得 |
 | `requestSelection()` | `selection:read` | 選択状態を取得 |
 | `notify(message, level?)` | `ui:notify` | 通知を表示 |
@@ -100,7 +101,22 @@ https://drawtonomy.com?ext=http://localhost:3001/manifest.json
 | `createRectangle(x, y, w, h, options?)` | 矩形を作成 |
 | `createEllipse(x, y, w, h, options?)` | 楕円を作成 |
 | `createText(x, y, text, options?)` | テキストを作成 |
+| `createPathWithFootprints(points, options?)` | パス+フットプリントを一括作成 |
 | `createSnapshot(shapes)` | スナップショットを作成 |
+
+### 幾何計算関数
+
+| 関数 | 説明 |
+|------|------|
+| `evaluatePathAt(points, t)` | パラメトリックt [0..1]での位置と接線を取得 |
+| `snapToPath(points, query)` | 点をパス上の最近傍に投影 |
+| `computeArcLengths(points)` | 累積弧長を計算 |
+| `totalArcLength(points)` | パス全長を取得 |
+| `uniformTValues(count)` | 等間隔のt値を生成 |
+| `computeHeadings(points)` | 各点の進行方向角度を計算 |
+| `interpolatePosition(p1, p2, t)` | 2点間の線形補間 |
+| `getBoundingBox(points)` | バウンディングボックスを取得 |
+| `distanceToSegment(point, a, b)` | 点からセグメントまでの距離 |
 
 ## デプロイ
 

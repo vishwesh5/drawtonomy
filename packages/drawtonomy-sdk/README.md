@@ -84,6 +84,7 @@ http://localhost:3000/?ext=http://localhost:3001/manifest.json
 | `deleteShapes(ids)` | `shapes:write` | Delete shapes |
 | `requestShapes(filter?)` | `shapes:read` | Read shapes |
 | `requestSnapshot()` | `snapshot:read` | Get snapshot |
+| `exportScene(format)` | `snapshot:export` | Export scene (svg/png/jpeg/pdf/eps) |
 | `requestViewport()` | `viewport:read` | Get viewport info |
 | `requestSelection()` | `selection:read` | Get selection state |
 | `notify(message, level?)` | `ui:notify` | Show notification |
@@ -102,7 +103,22 @@ http://localhost:3000/?ext=http://localhost:3001/manifest.json
 | `createRectangle(x, y, w, h, options?)` | Create a rectangle |
 | `createEllipse(x, y, w, h, options?)` | Create an ellipse |
 | `createText(x, y, text, options?)` | Create text |
+| `createPathWithFootprints(points, options?)` | Create path with footprints |
 | `createSnapshot(shapes)` | Create a snapshot |
+
+### Geometry Functions
+
+| Function | Description |
+|----------|-------------|
+| `evaluatePathAt(points, t)` | Get position + tangent at parametric t [0..1] |
+| `snapToPath(points, query)` | Project a point onto the nearest path location |
+| `computeArcLengths(points)` | Compute cumulative arc lengths |
+| `totalArcLength(points)` | Get total path length |
+| `uniformTValues(count)` | Generate evenly-spaced t values |
+| `computeHeadings(points)` | Compute heading angles for each point |
+| `interpolatePosition(p1, p2, t)` | Linear interpolation between two points |
+| `getBoundingBox(points)` | Get bounding box |
+| `distanceToSegment(point, a, b)` | Point-to-segment distance |
 
 ## Deployment
 
