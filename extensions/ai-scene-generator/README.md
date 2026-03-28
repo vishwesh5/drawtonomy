@@ -1,8 +1,22 @@
 # AI Scene Generator
 
-A drawtonomy extension that generates traffic scenes from natural language descriptions using AI (Anthropic Claude / OpenAI GPT).
+A drawtonomy extension that generates editable traffic scenes from natural language descriptions, OpenSCENARIO XML, or DSL input using AI (Anthropic Claude / OpenAI GPT / Google Gemini).
 
 [日本語版はこちら](README.ja.md)
+
+## Demo
+
+### Natural Language
+
+> *Prompt: "A 3-lane highway going left-to-right. An ego sedan (blue) in the center lane, a truck (grey) in the right lane slightly ahead. Show a dashed path for the ego vehicle changing to the left lane."*
+
+<video src="https://github.com/user-attachments/assets/16cb1980-c912-44f0-a606-de2b50d46287" width="80%" controls></video>
+
+### OpenSCENARIO
+
+Generated from [ASAM OpenSCENARIO DSL - Euro NCAP scenario example](https://publications.pages.asam.net/standards/ASAM_OpenSCENARIO/ASAM_OpenSCENARIO_DSL/latest/annexes/examples.html#_euro_ncap):
+
+<video src="https://github.com/user-attachments/assets/ffcf0cff-11bf-406c-a3cb-9af49994015e" width="80%" controls></video>
 
 ---
 
@@ -28,13 +42,18 @@ http://localhost:3000/?ext=http://localhost:3001/manifest.json
 
 ### Usage
 
-1. **Select Provider** — Choose Claude (Anthropic) or GPT (OpenAI)
+1. **Select Provider** — Choose Claude (Anthropic), GPT (OpenAI), or Gemini (Google)
 2. **Select Model** — Choose which model to use
    - Claude: Opus 4 (most capable) / Sonnet 4 (balanced) / Haiku 4 (fast & low cost)
    - GPT: o3-mini (most capable) / GPT-4o (balanced) / GPT-4o mini (fast & low cost)
+   - Gemini: 2.5 Pro (most capable) / 2.5 Flash (balanced) / 2.0 Flash (fast & low cost)
 3. **Enter API Key** — Enter the API key for the selected provider
-4. **Scene Description** — Describe the scene you want to generate
-5. **Generate Scene** — Click to generate. Shapes will be drawn on the canvas
+4. **Select Input Mode** — Choose from:
+   - **Natural Language** — Describe the scene in plain text
+   - **OpenSCENARIO** — Paste OpenSCENARIO XML or DSL code
+   - **Text → OSC** — Describe in natural language, auto-convert to OpenSCENARIO DSL
+5. **Enter Prompt / Code** — Describe the scene or paste OpenSCENARIO code
+6. **Generate Scene** — Click to generate. Shapes will be drawn on the canvas
 
 ### Prompt Examples
 
@@ -154,3 +173,7 @@ const shapes = await client.requestShapes()
 // Send notification
 client.notify('Done!', 'success')
 ```
+
+## Contributors
+
+- [@vishwesh5](https://github.com/vishwesh5)
