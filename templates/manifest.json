@@ -1,0 +1,23 @@
+{
+  "vehicle": [
+    { "id": "sedan", "name": "Sedan", "svg": "vehicle/sedan.svg", "w": 30, "h": 56, "viewBox": [25, 47.032] },
+    { "id": "bus", "name": "Bus", "svg": "vehicle/bus.svg", "w": 37, "h": 92, "viewBox": [341, 850] },
+    { "id": "truck", "name": "Truck", "svg": "vehicle/truck.svg", "w": 43, "h": 147, "viewBox": [328, 1114] },
+    { "id": "golf_cart", "name": "Golf Cart", "svg": "vehicle/golf_cart.svg", "w": 23, "h": 43, "viewBox": [335, 613] },
+    { "id": "amr", "name": "AMR", "svg": "vehicle/amr.svg", "w": 11, "h": 16, "viewBox": [601, 870] },
+    { "id": "amr2", "name": "AMR 2", "svg": "vehicle/amr2.svg", "w": 11, "h": 16, "viewBox": [477, 694] },
+    { "id": "robovac", "name": "Robovac", "svg": "vehicle/robovac.svg", "w": 11, "h": 11, "viewBox": [678, 665] },
+    { "id": "motorcycle", "name": "Motorcycle", "svg": "vehicle/motorcycle.svg", "w": 18, "h": 36, "viewBox": [410, 830] },
+    { "id": "motorcycle2", "name": "Motorcycle 2", "svg": "vehicle/motorcycle2.svg", "w": 22, "h": 43, "viewBox": [542, 921] },
+    { "id": "bicycle", "name": "Bicycle", "svg": "vehicle/bicycle.svg", "w": 18, "h": 36, "viewBox": [619, 1212] },
+    { "id": "bicycle2", "name": "Bicycle 2", "svg": "vehicle/bicycle2.svg", "w": 17, "h": 42, "viewBox": [497, 1224] },
+    { "id": "rectangle", "name": "Rectangle", "svg": "", "w": 30, "h": 56, "viewBox": [30, 56] },
+    { "id": "default", "name": "Simple", "svg": "", "w": 30, "h": 56, "viewBox": [30, 56] }
+  ],
+  "pedestrian": [
+    { "id": "filled", "name": "Pedestrian (Filled)", "svg": "pedestrian/pedestrian_filled.svg", "w": 22, "h": 22, "viewBox": [620, 620], "replaceColor": null },
+    { "id": "pedestrian", "name": "Pedestrian", "svg": "pedestrian/pedestrian.svg", "w": 22, "h": 22, "viewBox": [590, 590], "replaceColor": null },
+    { "id": "walk", "name": "Pedestrian (Walking)", "svg": "pedestrian/pedestrian_walk.svg", "w": 22, "h": 22, "viewBox": [220, 220], "replaceColor": "#b3b3b3", "defaultColor": "grey-300" },
+    { "id": "simple", "name": "Pedestrian (Simple)", "svg": "pedestrian/pedestrian_simple.svg", "w": 22, "h": 22, "viewBox": [210, 210], "replaceColor": "#b3b3b3", "defaultColor": "grey-300" }
+  ]
+}
