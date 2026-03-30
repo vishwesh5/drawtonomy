@@ -1,0 +1,13 @@
+{
+  "id": "template-preview",
+  "name": "Template Preview",
+  "version": "0.1.0",
+  "description": "Preview and test custom SVG templates on the canvas",
+  "author": { "name": "@kosuke55", "url": "https://github.com/kosuke55" },
+  "entry": "./index.html",
+  "capabilities": [
+    "templates:write",
+    "ui:panel",
+    "ui:notify"
+  ]
+}
