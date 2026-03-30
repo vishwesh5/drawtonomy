@@ -92,7 +92,7 @@ Add your template to the appropriate category in `manifest.json`:
 
 ### 4. Preview with template-preview extension
 
-Use the [template-preview extension](../extensions/template-preview/) to test your template on the canvas:
+Use the [template-preview extension](../extensions/template-preview/README.md) to test your template on the canvas:
 
 ```bash
 # Terminal 1: Start dev server
