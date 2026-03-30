@@ -26,73 +26,9 @@ Design your SVG with the following guidelines:
 - No external references (fonts, images, links)
 - Keep file size under 512KB
 
-### 2. Choose Color Mode
+### 2. Preview with template-preview extension
 
-Templates support two color-change modes:
-
-| Mode | `replaceColor` | How it works | Best for |
-|------|:---:|------|------|
-| **Full color** | omit or `null` | Entire SVG used as CSS mask, filled with user's chosen color | Single-color silhouettes |
-| **Partial color** | `"#hexcolor"` | Only paths matching this hex color are replaced | Multi-color SVGs where only part changes |
-
-#### Full color mode (default)
-
-Your SVG is used as a mask. All non-transparent areas will be filled with the user's color.
-
-```xml
-<!-- Good: solid black silhouette -->
-<svg viewBox="0 0 100 200">
-  <path d="M50 10 L90 190 L10 190 Z" fill="#000000"/>
-</svg>
-```
-
-#### Partial color mode
-
-Specify which color in your SVG should be replaced. Other colors remain unchanged.
-
-```xml
-<!-- The #b3b3b3 parts will change color, #000000 stays black -->
-<svg viewBox="0 0 100 200">
-  <path d="M30 50 L70 50 L70 150 L30 150 Z" fill="#b3b3b3"/>  <!-- This changes -->
-  <circle cx="50" cy="30" r="15" fill="#000000"/>               <!-- This stays -->
-</svg>
-```
-
-### 3. Add manifest.json Entry
-
-Add your template to the appropriate category in `manifest.json`:
-
-```json
-{
-  "vehicle": [
-    {
-      "id": "my-vehicle",
-      "name": "My Vehicle",
-      "svg": "vehicle/my-vehicle.svg",
-      "w": 30,
-      "h": 56,
-      "viewBox": [100, 200]
-    }
-  ]
-}
-```
-
-#### Fields
-
-| Field | Type | Required | Description |
-|-------|------|:---:|------|
-| `id` | string | yes | Unique identifier (lowercase, hyphens allowed) |
-| `name` | string | yes | Display name shown in the UI |
-| `svg` | string | yes | Path relative to `templates/` directory |
-| `w` | number | yes | Default width in pixels on canvas |
-| `h` | number | yes | Default height in pixels on canvas |
-| `viewBox` | [number, number] | yes | SVG viewBox [width, height] for aspect ratio |
-| `replaceColor` | string or null | no | Hex color to replace (null = full color mode) |
-| `defaultColor` | string | no | Default color key (default: "black") |
-
-### 4. Preview with template-preview extension
-
-Use the [template-preview extension](../extensions/template-preview/README.md) to test your template on the canvas:
+Use the [template-preview extension](../extensions/template-preview/README.md) to preview your SVG on the canvas and configure all settings:
 
 ```bash
 # Terminal 1: Start dev server
@@ -108,14 +44,16 @@ open "http://localhost:3000/?ext=http://localhost:3002/manifest.json"
 ```
 
 1. Drop your SVG file into the extension panel
-2. Adjust size and color mode
-3. Click **Register on Canvas** to preview
-4. Copy the generated manifest.json entry with **Copy to Clipboard**
+2. Choose category (Vehicle / Pedestrian)
+3. Adjust size with the Width/Height sliders
+4. Select color mode (Full / Partial)
+5. Click **Register on Canvas** to preview on the canvas
+6. When satisfied, click **Copy to Clipboard** to copy the generated `manifest.json` entry
 
-### 5. Submit a PR
+### 3. Submit a PR
 
 1. Place your SVG file in `templates/vehicle/` or `templates/pedestrian/`
-2. Add the generated entry to `manifest.json`
+2. Paste the generated entry into `manifest.json`
 3. Submit a pull request
 
 ## Size Guidelines
