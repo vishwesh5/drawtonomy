@@ -24,7 +24,7 @@
 - 🛣️ **Lane Connection Management** - Edit with understanding of lane relationships
 - ⚡ **Lane Tool** - Auto-generate from centerline or create from existing boundaries. Smooth boundaries with one click
 - ➕ **Intersection Templates** - Place complex intersections with one click
-- 🚙 **Rich Drawing Tools & Templates** - Various vehicles, pedestrians, traffic lights
+- 🚙 **Rich Drawing Tools & Templates** - Various vehicles, pedestrians, traffic lights. [Add your own](templates/TEMPLATE_GUIDE.md)
 - 🧲 **Snap Function** - Auto-snap to existing points and lines
 - 🔗 **Point Sharing** - Connect shapes by sharing existing points
 - 👣 **Path Footprint** - Auto-place footprints on paths with synced style, size, and orientation
@@ -60,7 +60,7 @@ Place complex intersection structures with templates in one click.
 
 ### 🚙 Rich Drawing Tools & Templates
 
-Drawing tools and shape templates for easily expressing autonomous driving scenarios.
+Drawing tools and shape templates for easily expressing autonomous driving scenarios. You can also [add custom SVG templates](templates/TEMPLATE_GUIDE.md) via PR.
 
 **🚗 Autonomous Driving Focused:**
 
@@ -234,4 +234,4 @@ Available npm packages:
 | [`@drawtonomy/sdk`](https://www.npmjs.com/package/@drawtonomy/sdk) | SDK for building extensions (ExtensionClient, shape factory functions, types) |
 | [`@drawtonomy/dev-server`](https://www.npmjs.com/package/@drawtonomy/dev-server) | Local dev server for extension development |
 
-📖 **[Extension Development Guide](docs/extensions.md)** | [日本語](docs/extensions.ja.md) | [Sample Extension](extensions/ai-scene-generator/)
+📖 **[Extension Development Guide](docs/extensions.md)** | [日本語](docs/extensions.ja.md) | [AI Scene Generator](extensions/ai-scene-generator/) | [Template Preview](extensions/template-preview/)
