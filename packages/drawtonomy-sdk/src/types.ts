@@ -32,6 +32,13 @@ export interface LinestringProps {
   arrowHeadSize?: number | null
   smooth?: boolean | null
   segments?: Record<string, { color?: string; strokeWidth?: number; opacity?: number }> | null
+  footprint?: {
+    interval: number
+    offset: number
+    templateId: string
+    anchorOffset?: number
+  }
+  footprintIds?: string[]
 }
 
 export interface LaneProps {
@@ -58,6 +65,7 @@ export interface VehicleProps {
   attributes: { type: 'vehicle'; subtype: string }
   osmId: string
   templateId: string
+  parentPathId?: string
 }
 
 export interface PedestrianProps {
@@ -161,6 +169,7 @@ export type ExtensionCapability =
   | 'shapes:write'
   | 'shapes:read'
   | 'snapshot:read'
+  | 'snapshot:export'
   | 'viewport:read'
   | 'selection:read'
   | 'ui:panel'

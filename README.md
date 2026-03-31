@@ -1,4 +1,4 @@
-# <img src="./src/client/public/logo.png" width="32" height="32" align="center" /> drawtonomy
+# <img src="./docs/images/logo.png" width="32" height="32" align="center" /> drawtonomy
 
 <h3 align="center">
   Whiteboard for Driving Diagrams 🚗
@@ -14,7 +14,9 @@
   💬 <a href="https://github.com/kosuke55/drawtonomy/issues">Report issues / Request features</a>
 </h4>
 
-<video src="https://github.com/user-attachments/assets/714c13e7-e789-46d9-9e39-6cfed03b7a93" width="80%" controls></video>
+<p align="center">
+  <img src="./docs/videos/drawtonomy-demo.gif" width="80%" />
+</p>
 
 ## ✨ Features
 
@@ -22,7 +24,7 @@
 - 🛣️ **Lane Connection Management** - Edit with understanding of lane relationships
 - ⚡ **Lane Tool** - Auto-generate from centerline or create from existing boundaries. Smooth boundaries with one click
 - ➕ **Intersection Templates** - Place complex intersections with one click
-- 🚙 **Rich Drawing Tools & Templates** - Various vehicles, pedestrians, traffic lights
+- 🚙 **Rich Drawing Tools & Templates** - Various vehicles, pedestrians, traffic lights. [Add your own](templates/TEMPLATE_GUIDE.md)
 - 🧲 **Snap Function** - Auto-snap to existing points and lines
 - 🔗 **Point Sharing** - Connect shapes by sharing existing points
 - 👣 **Path Footprint** - Auto-place footprints on paths with synced style, size, and orientation
@@ -30,6 +32,7 @@
 - 💾 **Editable Save Format** - Re-edit while preserving lane connection info
 - 🗺️ **[Lanelet2](https://github.com/fzi-forschungszentrum-informatik/Lanelet2) Support** - Import OSM format maps
 - 🤖 **ROS Map Support** - Import OccupancyGrid maps (.pgm + .yaml) from SLAM
+- 🤖 **[AI Scene Generator](extensions/ai-scene-generator/)** - Generate editable scenes from natural language, OpenSCENARIO XML, or DSL
 
 ## 🎯 Main Features
 
@@ -57,7 +60,7 @@ Place complex intersection structures with templates in one click.
 
 ### 🚙 Rich Drawing Tools & Templates
 
-Drawing tools and shape templates for easily expressing autonomous driving scenarios.
+Drawing tools and shape templates for easily expressing autonomous driving scenarios. You can also [add custom SVG templates](templates/TEMPLATE_GUIDE.md) via PR.
 
 **🚗 Autonomous Driving Focused:**
 
@@ -154,6 +157,27 @@ Compatible with nav2, cartographer, gmapping, and other SLAM tools.
   <img src="./docs/images/ros-occupancy-grid-map.png" width="80%" />
 </p>
 
+### 🤖 [AI Scene Generator](extensions/ai-scene-generator/)
+
+Generate editable driving scenes on the canvas from natural language descriptions, OpenSCENARIO XML, or DSL input.
+AI automatically interprets the scenario and places lanes, vehicles, pedestrians, and other elements as fully editable shapes.
+Supports Anthropic Claude, OpenAI GPT, and Google Gemini as AI providers.
+Open from the **Extensions** button at the bottom-right of the canvas.
+
+#### Natural Language
+
+> *Prompt: "A 3-lane highway going left-to-right. An ego sedan (blue) in the center lane, a truck (grey) in the right lane slightly ahead. Show a dashed path for the ego vehicle changing to the left lane."*
+
+<video src="https://github.com/user-attachments/assets/16cb1980-c912-44f0-a606-de2b50d46287" width="80%" controls></video>
+
+#### OpenSCENARIO
+
+Generated from [ASAM OpenSCENARIO DSL - Euro NCAP scenario example](https://publications.pages.asam.net/standards/ASAM_OpenSCENARIO/ASAM_OpenSCENARIO_DSL/latest/annexes/examples.html#_euro_ncap):
+
+<video src="https://github.com/user-attachments/assets/ffcf0cff-11bf-406c-a3cb-9af49994015e" width="80%" controls></video>
+
+**Contributors:** [@vishwesh5](https://github.com/vishwesh5)
+
 ## ⌨️ Keyboard Shortcuts
 
 ### Tool Switching
@@ -210,4 +234,4 @@ Available npm packages:
 | [`@drawtonomy/sdk`](https://www.npmjs.com/package/@drawtonomy/sdk) | SDK for building extensions (ExtensionClient, shape factory functions, types) |
 | [`@drawtonomy/dev-server`](https://www.npmjs.com/package/@drawtonomy/dev-server) | Local dev server for extension development |
 
-📖 **[Extension Development Guide](docs/extensions.md)** | [日本語](docs/extensions.ja.md) | [Sample Extension](extensions/ai-scene-generator/)
+📖 **[Extension Development Guide](docs/extensions.md)** | [日本語](docs/extensions.ja.md) | [AI Scene Generator](extensions/ai-scene-generator/) | [Template Preview](extensions/template-preview/)
