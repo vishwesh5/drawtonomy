@@ -1,4 +1,5 @@
 // Path Footprint Lab - Development extension for variable footprint positioning
+// Modified: Live slider updates, per-path state persistence, stateful UI
 
 // --- Inline ExtensionClient (avoid npm dependency on unpublished SDK) ---
 
@@ -113,13 +114,17 @@ function evaluatePathAt(points: Point2D[], t: number): PathEvalResult {
   const arcLengths = computeArcLengths(points)
   const totalLen = arcLengths[arcLengths.length - 1]
   if (totalLen === 0) return fallback
+
   const clampedT = Math.max(0, Math.min(1, t))
   const targetLen = clampedT * totalLen
+
   let lo = 0, hi = points.length - 2
   while (lo < hi) { const mid = (lo + hi) >> 1; if (arcLengths[mid + 1] < targetLen) lo = mid + 1; else hi = mid }
+
   const segStart = points[lo], segEnd = points[lo + 1]
   const segLen = arcLengths[lo + 1] - arcLengths[lo]
   const localT = segLen > 0 ? (targetLen - arcLengths[lo]) / segLen : 0
+
   const position: Point2D = { x: segStart.x + (segEnd.x - segStart.x) * localT, y: segStart.y + (segEnd.y - segStart.y) * localT }
   const dx = segEnd.x - segStart.x, dy = segEnd.y - segStart.y
   const len = Math.sqrt(dx * dx + dy * dy)
@@ -137,7 +142,22 @@ function nextId(prefix = 'fplab'): string { return `${prefix}_${++idCounter}_${D
 let client: ExtensionClient
 let selectedPathId: string | null = null
 let selectedPathPoints: Point2D[] = []
-let footprints: Array<{ t: number }> = [{ t: 0.2 }, { t: 0.5 }, { t: 0.8 }]
+let footprints: Array<{ t: number }> = []
+
+// Per-path state persistence
+interface PathState {
+  footprints: Array<{ t: number }>
+  templateId: string
+  placedShapeIds: string[]  // IDs of shapes currently on canvas for this path
+  isPlaced: boolean         // whether participants have been placed at least once
+  needsUpdate: boolean      // whether participant count changed since last place/update
+}
+const pathStateMap = new Map<string, PathState>()
+
+// UI state tracking
+let isPlaced = false          // have shapes been placed on canvas for current path?
+let needsUpdate = false       // participant count changed since last place/update?
+let placedShapeIds: string[] = []  // shape IDs currently on canvas
 
 // Template definitions (matching host app)
 const TEMPLATES = [
@@ -152,14 +172,87 @@ const TEMPLATES = [
   { id: 'walk', name: 'Walk', w: 22, h: 22, type: 'pedestrian' as const, svg: '/templates/pedestrian/pedestrian_walk.svg', vbW: 220, vbH: 220 },
   { id: 'simple', name: 'Simple', w: 22, h: 22, type: 'pedestrian' as const, svg: '/templates/pedestrian/pedestrian_simple.svg', vbW: 210, vbH: 210 },
 ]
+
 let selectedTemplate = TEMPLATES[0]
+
+// --- UI State Management ---
+
+function showPanel(hasPath: boolean) {
+  const noPathState = document.getElementById('no-path-state')!
+  const pathPanel = document.getElementById('path-panel')!
+  noPathState.style.display = hasPath ? 'none' : 'flex'
+  pathPanel.style.display = hasPath ? 'block' : 'none'
+}
+
+function updateUIState() {
+  const btnPlace = document.getElementById('btn-place')!
+  const updateBanner = document.getElementById('update-banner')!
+  const liveIndicator = document.getElementById('live-indicator')!
+  const btnRemoveLast = document.getElementById('btn-remove-last')!
+  const participantCount = document.getElementById('participant-count')!
+
+  participantCount.textContent = String(footprints.length)
+
+  // Show/hide remove-last button
+  btnRemoveLast.style.display = footprints.length > 0 ? 'inline-block' : 'none'
+
+  if (footprints.length === 0) {
+    // No participants at all
+    btnPlace.style.display = 'none'
+    updateBanner.style.display = 'none'
+    liveIndicator.style.display = 'none'
+  } else if (!isPlaced) {
+    // Participants added but never placed on canvas
+    btnPlace.style.display = 'block'
+    updateBanner.style.display = 'none'
+    liveIndicator.style.display = 'none'
+  } else if (needsUpdate) {
+    // Placed, but participant count changed — need update
+    btnPlace.style.display = 'none'
+    updateBanner.style.display = 'block'
+    liveIndicator.style.display = 'none'
+  } else {
+    // Placed and in sync — live slider mode
+    btnPlace.style.display = 'none'
+    updateBanner.style.display = 'none'
+    liveIndicator.style.display = 'block'
+  }
+}
+
+// --- Save / Restore per-path state ---
+
+function saveCurrentPathState() {
+  if (!selectedPathId) return
+  pathStateMap.set(selectedPathId, {
+    footprints: footprints.map(f => ({ t: f.t })),
+    templateId: selectedTemplate.id,
+    placedShapeIds: [...placedShapeIds],
+    isPlaced,
+    needsUpdate,
+  })
+}
+
+function restorePathState(pathId: string) {
+  const saved = pathStateMap.get(pathId)
+  if (saved) {
+    footprints = saved.footprints.map(f => ({ t: f.t }))
+    const tmpl = TEMPLATES.find(t => t.id === saved.templateId)
+    if (tmpl) { selectedTemplate = tmpl }
+    placedShapeIds = [...saved.placedShapeIds]
+    isPlaced = saved.isPlaced
+    needsUpdate = saved.needsUpdate
+  } else {
+    // New path — start fresh
+    footprints = []
+    placedShapeIds = []
+    isPlaced = false
+    needsUpdate = false
+  }
+}
 
 // --- UI ---
 
-// Resolve asset URL relative to host (parent window origin)
 function hostUrl(path: string): string {
-  // In dev: Extension is on localhost:3001, host is on localhost:3000
-  // Use referrer or hardcode relative to parent
   try {
     const parentOrigin = document.referrer ? new URL(document.referrer).origin : window.location.origin
     return parentOrigin + path
@@ -176,7 +269,6 @@ function renderTemplateGrid() {
     btn.className = `template-btn${tmpl.id === selectedTemplate.id ? ' active' : ''}`
     btn.title = tmpl.name
 
-    // Calculate icon size based on viewBox aspect ratio (max 24x24)
     const maxSize = 24
     const aspect = tmpl.vbW / tmpl.vbH
     let iconW = maxSize, iconH = maxSize
@@ -198,6 +290,7 @@ function renderTemplateGrid() {
     btn.addEventListener('click', () => {
       selectedTemplate = tmpl
       renderTemplateGrid()
+      saveCurrentPathState()
     })
     container.appendChild(btn)
   })
@@ -206,6 +299,7 @@ function renderTemplateGrid() {
 function renderFootprintList() {
   const container = document.getElementById('footprint-list')!
   container.innerHTML = ''
+
   footprints.forEach((fp, i) => {
     const row = document.createElement('div')
     row.className = 'footprint-row'
@@ -215,91 +309,226 @@ function renderFootprintList() {
       <span class="t-value">${fp.t.toFixed(2)}</span>
       <button class="btn-remove" data-index="${i}">&times;</button>
     `
+
     const slider = row.querySelector('input')!
     slider.addEventListener('input', (e) => {
       const idx = parseInt((e.target as HTMLInputElement).dataset.index!)
       footprints[idx].t = parseFloat((e.target as HTMLInputElement).value)
       row.querySelector('.t-value')!.textContent = footprints[idx].t.toFixed(2)
+
+      // Live update: reposition shapes on slider drag if placed and in sync
+      if (isPlaced && !needsUpdate) {
+        debouncedLiveUpdate()
+      }
+
+      // Persist state
+      saveCurrentPathState()
     })
+
     const removeBtn = row.querySelector('button')!
     removeBtn.addEventListener('click', (e) => {
       const idx = parseInt((e.target as HTMLButtonElement).dataset.index!)
       footprints.splice(idx, 1)
       renderFootprintList()
+
+      // Cancel any pending/in-flight live update
+      cancelLiveUpdate()
+
+      // If shapes are placed, count mismatch means we need update
+      if (isPlaced) {
+        needsUpdate = true
+      }
+      if (footprints.length === 0) {
+        // All removed — clear shapes too
+        clearPlacedShapes()
+        isPlaced = false
+        needsUpdate = false
+      }
+      updateUIState()
+      saveCurrentPathState()
     })
+
     container.appendChild(row)
   })
+
+  updateUIState()
 }
 
 function setStatus(msg: string) {
   document.getElementById('status')!.textContent = msg
 }
 
-// --- Actions ---
+// --- Live Update (debounced delete-and-recreate) ---
+// updateShapes only modifies props — it cannot move top-level x/y/rotation.
+// So we debounce slider drags and do a full delete→add cycle.
+// A busy-lock + dirty-flag prevents overlapping async operations.
+// An abort flag lets addFootprint/removeLastFootprint cancel mid-flight ops.
 
-async function refreshSelection() {
+let liveDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let liveUpdateBusy = false
+let liveUpdateDirty = false
+let liveUpdateAborted = false
+
+/** Cancel any pending or in-flight live update. Safe to call anytime. */
+function cancelLiveUpdate() {
+  if (liveDebounceTimer) {
+    clearTimeout(liveDebounceTimer)
+    liveDebounceTimer = null
+  }
+  // Signal in-flight runLiveUpdate to bail out at its next checkpoint
+  liveUpdateAborted = true
+  liveUpdateDirty = false
+}
+
+function debouncedLiveUpdate() {
+  if (liveDebounceTimer) clearTimeout(liveDebounceTimer)
+  liveDebounceTimer = setTimeout(() => {
+    liveDebounceTimer = null
+    runLiveUpdate()
+  }, 120) // 120ms — fires after user pauses dragging
+}
+
+async function runLiveUpdate() {
+  if (!selectedPathId || selectedPathPoints.length < 2) return
+  if (!isPlaced || needsUpdate) return
+  if (footprints.length === 0) return
+
+  // If already running, mark dirty so we re-run when done
+  if (liveUpdateBusy) {
+    liveUpdateDirty = true
+    return
+  }
+
+  liveUpdateBusy = true
+  liveUpdateDirty = false
+  liveUpdateAborted = false
+
+  // Capture path ID at the start — if the host momentarily deselects (e.g. when
+  // the user clicks in the iframe), selectedPathId can become null mid-await.
+  // Using a local copy keeps the operation consistent.
+  const pathId = selectedPathId
+
   try {
-    const selection = await client.requestSelection()
-    if (selection.ids.length === 0) {
-      document.getElementById('path-info')!.textContent = 'No shape selected'
-      selectedPathId = null
-      selectedPathPoints = []
-      return
+    // --- Checkpoint: abort if cancelled before we touch anything ---
+    if (liveUpdateAborted) return
+
+    // 1. Refresh displayPoints to get latest path coordinates
+    const freshShapes = await client.requestShapes({ ids: [pathId] })
+    if (liveUpdateAborted) return  // checkpoint after await
+
+    const freshPath = freshShapes.find(s => s.id === pathId)
+    if (freshPath) {
+      const dp = freshPath.props._displayPoints as Point2D[] | undefined
+      if (dp && dp.length >= 2) {
+        selectedPathPoints = dp
+      }
     }
 
-    const shapes = await client.requestShapes({ ids: selection.ids })
-    const path = shapes.find(s => s.type === 'linestring' && s.props.isPath)
+    if (liveUpdateAborted) return  // checkpoint
 
-    if (!path) {
-      document.getElementById('path-info')!.textContent = 'Selected shape is not a path'
-      selectedPathId = null
-      selectedPathPoints = []
-      return
+    // 2. Delete existing shapes on this path
+    if (placedShapeIds.length > 0) {
+      client.deleteShapes(placedShapeIds)
+      await new Promise(resolve => setTimeout(resolve, 150))
     }
 
-    selectedPathId = path.id
-    // Use smoothed display points if available, otherwise fall back to raw points
-    const displayPoints = path.props._displayPoints as Point2D[] | undefined
-    console.log('[FootprintLab] _displayPoints:', displayPoints ? displayPoints.length + ' points' : 'undefined', 'props keys:', Object.keys(path.props))
-    if (displayPoints && displayPoints.length >= 2) {
-      selectedPathPoints = displayPoints
-    } else {
-      const pointIds = path.props.pointIds as string[]
-      const allShapes = await client.requestShapes({ ids: pointIds })
-      selectedPathPoints = pointIds.map(pid => {
-        const pt = allShapes.find(s => s.id === pid)
-        return pt ? { x: pt.x, y: pt.y } : { x: 0, y: 0 }
-      }).filter(p => p.x !== 0 || p.y !== 0)
+    if (liveUpdateAborted) return  // checkpoint — critical: shapes are deleted, don't leave orphans
+
+    // 3. Build new shapes at current slider positions
+    const sorted = [...footprints].sort((a, b) => a.t - b.t)
+    const shapeType = selectedTemplate.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
+    const attrType = selectedTemplate.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
+    const attrSubtype = selectedTemplate.type === 'pedestrian' ? 'person' : 'car'
+
+    const shapes: BaseShape[] = sorted.map(fp => {
+      const evalResult = evaluatePathAt(selectedPathPoints, fp.t)
+      return {
+        id: nextId('fp'),
+        type: shapeType,
+        x: evalResult.position.x,
+        y: evalResult.position.y,
+        rotation: evalResult.tangentAngleDeg,
+        zIndex: shapeType === 'pedestrian' ? 3000 : 4000,
+        props: {
+          w: selectedTemplate.w,
+          h: selectedTemplate.h,
+          color: 'black',
+          size: 'm',
+          opacity: 1,
+          attributes: { type: attrType, subtype: attrSubtype },
+          osmId: '',
+          templateId: selectedTemplate.id,
+          parentPathId: pathId,  // <-- use captured pathId, NOT selectedPathId
+        },
+      }
+    })
+
+    client.addShapes(shapes)
+
+    // 4. Wait and query for remapped IDs
+    await new Promise(resolve => setTimeout(resolve, 350))
+
+    if (liveUpdateAborted) return  // checkpoint
+
+    const queryTypes = ['vehicle', 'pedestrian']
+    let allOfType: BaseShape[] = []
+    for (const qt of queryTypes) {
+      const found = await client.requestShapes({ types: [qt] })
+      allOfType = allOfType.concat(found)
     }
 
-    const smoothed = displayPoints ? ' (smoothed)' : ' (raw)'
-    document.getElementById('path-info')!.textContent = `Path: ${path.id.slice(0, 16)}... (${selectedPathPoints.length} pts${smoothed})`
-    setStatus('Path selected')
+    if (liveUpdateAborted) return  // checkpoint
+
+    const newFpIds = allOfType
+      .filter(s => s.props.parentPathId === pathId)  // <-- use captured pathId
+      .map(s => s.id)
+
+    placedShapeIds = newFpIds
+
+    // 5. Update path footprint config
+    if (newFpIds.length > 0) {
+      const arcLengths = computeArcLengths(selectedPathPoints)
+      const totalLen = arcLengths[arcLengths.length - 1]
+      const interval = sorted.length > 1
+        ? Math.round(totalLen / (sorted.length - 1))
+        : Math.round(totalLen)
+
+      client.updateShapes([{
+        id: pathId,  // <-- use captured pathId
+        props: {
+          footprint: {
+            interval,
+            offset: 0,
+            templateId: selectedTemplate.id,
+            anchorOffset: 0,
+            mode: 'variable',
+            tValues: sorted.map(f => f.t),
+          },
+          footprintIds: newFpIds,
+        },
+      }])
+    }
+
+    saveCurrentPathState()
   } catch (e) {
-    setStatus(`Error: ${e}`)
+    console.warn('[FootprintLab] Live update error:', e)
+  } finally {
+    liveUpdateBusy = false
+    // If slider moved again while we were busy (and not aborted), re-run
+    if (!liveUpdateAborted && liveUpdateDirty) {
+      liveUpdateDirty = false
+      runLiveUpdate()
+    }
   }
 }
 
-function addFootprint() {
-  const maxT = footprints.length > 0 ? Math.max(...footprints.map(f => f.t)) : 0
-  const newT = Math.min(1, maxT + 0.1)
-  footprints.push({ t: parseFloat(newT.toFixed(2)) })
-  renderFootprintList()
-}
-
-async function applyFootprints() {
-  if (!selectedPathId || selectedPathPoints.length < 2) {
-    setStatus('Select a path first')
-    return
-  }
-
-  if (footprints.length === 0) {
-    setStatus('Add at least one footprint')
-    return
-  }
+// Fallback: delete and re-create shapes (used when updateShapes can't move position)
+async function fullRePlaceShapes() {
+  if (!selectedPathId || selectedPathPoints.length < 2) return
+  if (footprints.length === 0) return
 
   try {
-    // Refresh displayPoints to get latest path coordinates
+    // Refresh displayPoints
     const freshShapes = await client.requestShapes({ ids: [selectedPathId] })
     const freshPath = freshShapes.find(s => s.id === selectedPathId)
     if (freshPath) {
@@ -309,35 +538,17 @@ async function applyFootprints() {
       }
     }
 
-    // Remove existing footprints on this path
-    const existingShapes = await client.requestShapes({ types: ['vehicle'] })
-    const existingFpIds = existingShapes
-      .filter(s => s.props.parentPathId === selectedPathId)
-      .map(s => s.id)
-    if (existingFpIds.length > 0) {
-      client.deleteShapes(existingFpIds)
-      // Wait for deletion to complete
-      await new Promise(resolve => setTimeout(resolve, 200))
-    }
+    // Delete existing shapes
+    await clearPlacedShapes()
 
-    // Also clear footprint config on path first
-    client.updateShapes([{
-      id: selectedPathId,
-      props: { footprintIds: [] },
-    }])
-    await new Promise(resolve => setTimeout(resolve, 100))
-
-    // Create new footprints
+    // Create new shapes
     const sorted = [...footprints].sort((a, b) => a.t - b.t)
-
-    // Compute interval for footprint config
     const arcLengths = computeArcLengths(selectedPathPoints)
     const totalLen = arcLengths[arcLengths.length - 1]
     const interval = sorted.length > 1
       ? Math.round(totalLen / (sorted.length - 1))
       : Math.round(totalLen)
 
-    // Build vehicle shapes
     const shapeType = selectedTemplate.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
     const attrType = selectedTemplate.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
     const attrSubtype = selectedTemplate.type === 'pedestrian' ? 'person' : 'car'
@@ -367,19 +578,20 @@ async function applyFootprints() {
       })
     }
 
-    // Add footprints via addShapes (IDs will be remapped by validator)
     client.addShapes(shapes)
 
-    // Wait for shapes to be created, then find the remapped IDs
+    // Wait and find remapped IDs
     await new Promise(resolve => setTimeout(resolve, 500))
 
-    // Query vehicles with parentPathId matching our path to get remapped IDs
-    const allVehicles = await client.requestShapes({ types: ['vehicle'] })
-    const newFpIds = allVehicles
+    const queryType = selectedTemplate.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
+    const allOfType = await client.requestShapes({ types: [queryType] })
+    const newFpIds = allOfType
       .filter(s => s.props.parentPathId === selectedPathId)
       .map(s => s.id)
 
-    // Update path with footprint config using remapped IDs
+    placedShapeIds = newFpIds
+
+    // Update path with footprint config
     if (newFpIds.length > 0) {
       client.updateShapes([{
         id: selectedPathId,
@@ -397,10 +609,186 @@ async function applyFootprints() {
       }])
     }
 
-    client.notify(`${sorted.length} footprints applied`, 'success')
-    setStatus(`Applied ${sorted.length} footprints at t=${sorted.map(f => f.t.toFixed(2)).join(', ')}`)
+    isPlaced = true
+    needsUpdate = false
+    updateUIState()
+    saveCurrentPathState()
+
+    return newFpIds.length
   } catch (e) {
     setStatus(`Error: ${e}`)
+    return 0
+  }
+}
+
+async function clearPlacedShapes() {
+  if (!selectedPathId) return
+
+  try {
+    // Find all shapes belonging to this path
+    const existingVehicles = await client.requestShapes({ types: ['vehicle'] })
+    const existingPeds = await client.requestShapes({ types: ['pedestrian'] })
+    const allExisting = [...existingVehicles, ...existingPeds]
+    const existingFpIds = allExisting
+      .filter(s => s.props.parentPathId === selectedPathId)
+      .map(s => s.id)
+
+    if (existingFpIds.length > 0) {
+      client.deleteShapes(existingFpIds)
+      await new Promise(resolve => setTimeout(resolve, 200))
+    }
+
+    // Clear footprint config on path
+    client.updateShapes([{
+      id: selectedPathId,
+      props: { footprintIds: [] },
+    }])
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    placedShapeIds = []
+  } catch (e) {
+    console.warn('[FootprintLab] Error clearing shapes:', e)
+  }
+}
+
+// --- Actions ---
+
+async function refreshSelection() {
+  try {
+    const selection = await client.requestSelection()
+    if (selection.ids.length === 0) {
+      // Save state of previous path before clearing
+      saveCurrentPathState()
+      document.getElementById('path-info')!.textContent = 'No path selected'
+      selectedPathId = null
+      selectedPathPoints = []
+      showPanel(false)
+      return
+    }
+
+    const shapes = await client.requestShapes({ ids: selection.ids })
+    const path = shapes.find(s => s.type === 'linestring' && s.props.isPath)
+
+    if (!path) {
+      document.getElementById('path-info')!.textContent = 'Selected shape is not a path'
+      selectedPathId = null
+      selectedPathPoints = []
+      showPanel(false)
+      return
+    }
+
+    const previousPathId = selectedPathId
+    // Save previous path state
+    if (previousPathId && previousPathId !== path.id) {
+      saveCurrentPathState()
+    }
+
+    selectedPathId = path.id
+
+    // Use smoothed display points if available
+    const displayPoints = path.props._displayPoints as Point2D[] | undefined
+    console.log('[FootprintLab] _displayPoints:', displayPoints ? displayPoints.length + ' points' : 'undefined', 'props keys:', Object.keys(path.props))
+
+    if (displayPoints && displayPoints.length >= 2) {
+      selectedPathPoints = displayPoints
+    } else {
+      const pointIds = path.props.pointIds as string[]
+      const allShapes = await client.requestShapes({ ids: pointIds })
+      selectedPathPoints = pointIds.map(pid => {
+        const pt = allShapes.find(s => s.id === pid)
+        return pt ? { x: pt.x, y: pt.y } : { x: 0, y: 0 }
+      }).filter(p => p.x !== 0 || p.y !== 0)
+    }
+
+    // Restore state for this path
+    restorePathState(path.id)
+
+    const smoothed = displayPoints ? ' (smoothed)' : ' (raw)'
+    document.getElementById('path-info')!.textContent = `Path: ${path.id.slice(0, 16)}... (${selectedPathPoints.length} pts${smoothed})`
+
+    showPanel(true)
+    renderTemplateGrid()
+    renderFootprintList()
+    updateUIState()
+    setStatus('Path selected')
+  } catch (e) {
+    setStatus(`Error: ${e}`)
+  }
+}
+
+function addFootprint() {
+  const maxT = footprints.length > 0 ? Math.max(...footprints.map(f => f.t)) : 0
+  const newT = Math.min(1, maxT + 0.1)
+  footprints.push({ t: parseFloat(newT.toFixed(2)) })
+  renderFootprintList()
+
+  // Cancel any pending/in-flight live update so it doesn't delete shapes mid-add
+  cancelLiveUpdate()
+
+  // If already placed, adding a new participant means count changed
+  if (isPlaced) {
+    needsUpdate = true
+  }
+  updateUIState()
+  saveCurrentPathState()
+}
+
+function removeLastFootprint() {
+  if (footprints.length === 0) return
+  footprints.pop()
+  renderFootprintList()
+
+  // Cancel any pending/in-flight live update
+  cancelLiveUpdate()
+
+  if (isPlaced) {
+    if (footprints.length === 0) {
+      clearPlacedShapes()
+      isPlaced = false
+      needsUpdate = false
+    } else {
+      needsUpdate = true
+    }
+  }
+  updateUIState()
+  saveCurrentPathState()
+}
+
+// First-time placement
+async function placeParticipants() {
+  if (!selectedPathId || selectedPathPoints.length < 2) {
+    setStatus('Select a path first')
+    return
+  }
+  if (footprints.length === 0) {
+    setStatus('Add at least one participant')
+    return
+  }
+
+  setStatus('Placing participants...')
+  const count = await fullRePlaceShapes()
+  if (count && count > 0) {
+    client.notify(`${count} participants placed`, 'success')
+    setStatus(`Placed ${count} participants — drag sliders to reposition`)
+  }
+}
+
+// Re-sync after adding/removing participants
+async function updateParticipantPositions() {
+  if (!selectedPathId || selectedPathPoints.length < 2) {
+    setStatus('Select a path first')
+    return
+  }
+  if (footprints.length === 0) {
+    setStatus('Add at least one participant')
+    return
+  }
+
+  setStatus('Updating positions...')
+  const count = await fullRePlaceShapes()
+  if (count && count > 0) {
+    client.notify(`${count} positions updated`, 'success')
+    setStatus(`Updated ${count} participants — drag sliders to reposition`)
   }
 }
 
@@ -411,18 +799,17 @@ async function clearFootprints() {
   }
 
   try {
-    const existingShapes = await client.requestShapes({ types: ['vehicle'] })
-    const existingFpIds = existingShapes
-      .filter(s => s.props.parentPathId === selectedPathId)
-      .map(s => s.id)
-    if (existingFpIds.length > 0) {
-      client.deleteShapes(existingFpIds)
-    }
-    client.updateShapes([{
-      id: selectedPathId,
-      props: { footprintIds: [] },
-    }])
-    client.notify('Footprints cleared', 'info')
+    await clearPlacedShapes()
+    footprints = []
+    placedShapeIds = []
+    isPlaced = false
+    needsUpdate = false
+
+    renderFootprintList()
+    updateUIState()
+    saveCurrentPathState()
+
+    client.notify('All participants cleared', 'info')
     setStatus('Cleared')
   } catch (e) {
     setStatus(`Error: ${e}`)
@@ -444,7 +831,6 @@ function initFormatButtons() {
 async function exportScene() {
   const exportStatus = document.getElementById('export-status')!
   exportStatus.textContent = 'Exporting...'
-
   try {
     const requestId = 'export_' + Date.now().toString(36)
     const result = await new Promise<{ filename: string }>((resolve, reject) => {
@@ -462,7 +848,6 @@ async function exportScene() {
       window.parent.postMessage({ type: 'ext:export-request', payload: { requestId, format: selectedExportFormat } }, '*')
       setTimeout(() => reject(new Error('timeout')), 30000)
     })
-
     exportStatus.textContent = `Exported ${result.filename}`
   } catch (e) {
     exportStatus.textContent = `Error: ${e}`
@@ -470,20 +855,27 @@ async function exportScene() {
 }
 
 // --- Expose to window for inline onclick handlers and debugging ---
+
 ;(window as any).refreshSelection = refreshSelection
 ;(window as any).addFootprint = addFootprint
-;(window as any).applyFootprints = applyFootprints
+;(window as any).removeLastFootprint = removeLastFootprint
+;(window as any).placeParticipants = placeParticipants
+;(window as any).updateParticipantPositions = updateParticipantPositions
 ;(window as any).clearFootprints = clearFootprints
 ;(window as any).exportScene = exportScene
 ;(window as any).renderFootprintList = renderFootprintList
+
 // Expose state for debugging
 Object.defineProperty(window, 'selectedPathPoints', { get: () => selectedPathPoints })
 Object.defineProperty(window, 'selectedPathId', { get: () => selectedPathId })
 Object.defineProperty(window, 'footprints', { get: () => footprints, set: (v) => { footprints.length = 0; footprints.push(...v) } })
+Object.defineProperty(window, 'pathStateMap', { get: () => pathStateMap })
+Object.defineProperty(window, 'placedShapeIds', { get: () => placedShapeIds })
 
 // --- Auto-detect selection ---
 
 let lastSelectionId: string | null = null
+let deselectionGraceTimer: ReturnType<typeof setTimeout> | null = null
 
 async function pollSelection() {
   try {
@@ -493,14 +885,38 @@ async function pollSelection() {
     if (currentId !== lastSelectionId) {
       lastSelectionId = currentId
       if (currentId) {
+        // A shape is selected — clear any pending deselection grace timer
+        if (deselectionGraceTimer) {
+          clearTimeout(deselectionGraceTimer)
+          deselectionGraceTimer = null
+        }
         const shapes = await client.requestShapes({ ids: [currentId] })
         const path = shapes.find(s => s.type === 'linestring' && s.props.isPath)
         if (path) {
-          // Auto-refresh when a path is selected
-          await refreshSelection()
+          // Only call refreshSelection if it's a DIFFERENT path than the one we're
+          // already working with — avoids state reset when re-selecting same path
+          if (path.id !== selectedPathId) {
+            await refreshSelection()
+          }
         } else if (selectedPathId) {
-          // Selected something that's not a path
-          document.getElementById('path-info')!.textContent = 'Selected shape is not a path'
+          // Selected something that's not a path — keep showing current path panel
+          // (don't hide panel, user might be clicking on a participant shape)
+        }
+      } else {
+        // Nothing selected — but don't react immediately.
+        // Clicking in the extension iframe can cause transient deselection.
+        // Wait 600ms before treating it as a real deselection.
+        if (!deselectionGraceTimer && selectedPathId) {
+          deselectionGraceTimer = setTimeout(() => {
+            deselectionGraceTimer = null
+            // Re-check: if still no selection after grace period, it's real
+            if (lastSelectionId === null) {
+              saveCurrentPathState()
+              selectedPathId = null
+              selectedPathPoints = []
+              showPanel(false)
+            }
+          }, 600)
         }
       }
     }
@@ -515,10 +931,13 @@ async function main() {
   client = new ExtensionClient('path-footprint-lab')
   const init = await client.waitForInit()
   console.log('Path Footprint Lab connected:', init.grantedCapabilities)
+
+  // Start with no-path state
+  showPanel(false)
+
   renderTemplateGrid()
   renderFootprintList()
   initFormatButtons()
-  setStatus('Ready. Draw a path and select it.')
 
   // Poll for selection changes every 500ms
   setInterval(pollSelection, 500)
