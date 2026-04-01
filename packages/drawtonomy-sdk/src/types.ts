@@ -188,6 +188,16 @@ export interface ExtensionManifest {
   minHostVersion?: string
 }
 
+// Export
+export type ExportFormat = 'svg' | 'png' | 'jpeg' | 'eps' | 'pdf' | 'drawtonomy.svg' | 'json'
+
+export interface ExportResponse {
+  requestId: string
+  data: string
+  mimeType: string
+  filename: string
+}
+
 // Message types (for extension-side use)
 export interface ShapeFilter {
   types?: string[]
