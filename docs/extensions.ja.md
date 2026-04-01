@@ -250,7 +250,7 @@ open "http://localhost:3000/?ext=http://localhost:3001/manifest.json"
 | `ext:shapes-delete` | `shapes:write` | シェイプを削除 |
 | `ext:shapes-request` | `shapes:read` | シェイプデータを要求（フィルター付き） |
 | `ext:snapshot-request` | `snapshot:read` | スナップショットを要求 |
-| `ext:export-request` | `snapshot:export` | シーンをエクスポート（format: svg/png/jpeg/pdf/eps） |
+| `ext:export-request` | `snapshot:export` | シーンをエクスポート（format: svg/png/jpeg/pdf/eps）。`returnData: true`でBase64 data URIとしてデータを取得可能 |
 | `ext:viewport-request` | `viewport:read` | ビューポート情報を要求 |
 | `ext:selection-request` | `selection:read` | 選択状態を要求 |
 | `ext:notify` | `ui:notify` | トースト通知を表示 |
@@ -263,7 +263,7 @@ open "http://localhost:3000/?ext=http://localhost:3001/manifest.json"
 | `ext:init` | ready後、ケイパビリティ/ビューポート情報を送信 |
 | `ext:shapes-response` | shapes-requestへの応答 |
 | `ext:snapshot-response` | snapshot-requestへの応答 |
-| `ext:export-response` | export-requestへの応答（ホスト側でダウンロード実行） |
+| `ext:export-response` | export-requestへの応答。`returnData: true`の場合`data`にBase64 data URIが含まれる。それ以外はホスト側でダウンロード実行 |
 | `ext:viewport-response` | viewport-requestへの応答 |
 | `ext:selection-response` | selection-requestへの応答 |
 | `ext:error` | エラー発生時 |
@@ -295,6 +295,15 @@ const shapes = await client.requestShapes({ types: ['vehicle'] })
 
 // スナップショットを取得
 const snapshot = await client.requestSnapshot()
+
+// シーンをBase64 data URIとしてエクスポート（snapshot:exportケイパビリティが必要）
+const result = await client.requestExport('png', { returnData: true })
+// result.data = "data:image/png;base64,iVBOR..."
+// result.mimeType = "image/png"
+// result.filename = "scene-2026-04-02T12-00-00.png"
+
+// エクスポートしてファイルダウンロード（デフォルト動作）
+await client.requestExport('svg')
 
 // ビューポートを取得
 const viewport = await client.requestViewport()

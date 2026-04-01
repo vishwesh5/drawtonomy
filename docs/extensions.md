@@ -250,7 +250,7 @@ Extensions communicate with the host via `window.parent.postMessage()`.
 | `ext:shapes-delete` | `shapes:write` | Delete shapes |
 | `ext:shapes-request` | `shapes:read` | Request shape data (with filter) |
 | `ext:snapshot-request` | `snapshot:read` | Request snapshot |
-| `ext:export-request` | `snapshot:export` | Export scene (format: svg/png/jpeg/pdf/eps) |
+| `ext:export-request` | `snapshot:export` | Export scene (format: svg/png/jpeg/pdf/eps). Set `returnData: true` to receive Base64 data URI instead of downloading |
 | `ext:viewport-request` | `viewport:read` | Request viewport info |
 | `ext:selection-request` | `selection:read` | Request selection state |
 | `ext:notify` | `ui:notify` | Show toast notification |
@@ -263,7 +263,7 @@ Extensions communicate with the host via `window.parent.postMessage()`.
 | `ext:init` | After ready, sends capability/viewport info |
 | `ext:shapes-response` | Response to shapes-request |
 | `ext:snapshot-response` | Response to snapshot-request |
-| `ext:export-response` | Response to export-request (file downloaded by host) |
+| `ext:export-response` | Response to export-request. `data` contains Base64 data URI when `returnData: true`, empty string otherwise (file downloaded by host) |
 | `ext:viewport-response` | Response to viewport-request |
 | `ext:selection-response` | Response to selection-request |
 | `ext:error` | On error |
@@ -295,6 +295,15 @@ const shapes = await client.requestShapes({ types: ['vehicle'] })
 
 // Get snapshot
 const snapshot = await client.requestSnapshot()
+
+// Export scene as Base64 data URI (requires snapshot:export capability)
+const result = await client.requestExport('png', { returnData: true })
+// result.data = "data:image/png;base64,iVBOR..."
+// result.mimeType = "image/png"
+// result.filename = "scene-2026-04-02T12-00-00.png"
+
+// Export and trigger file download (default behavior)
+await client.requestExport('svg')
 
 // Get viewport
 const viewport = await client.requestViewport()
