@@ -13,7 +13,6 @@
       background: #fff;
       padding: 8px;
     }
-    h3 { font-size: 11px; font-weight: 600; color: #1e1e1e; margin-bottom: 8px; }
 
     /* Section */
     .section { margin-bottom: 8px; }
@@ -27,15 +26,24 @@
     }
     .separator { height: 1px; background: #e4e4e7; margin: 8px 0; }
 
-    /* Info box */
-    #info {
-      font-size: 9px;
-      color: #6b7280;
-      background: #f9fafb;
-      padding: 6px 8px;
-      border-radius: 4px;
-      margin-bottom: 8px;
+    /* No-path empty state */
+    #no-path-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 180px;
+      text-align: center;
+      color: #9ca3af;
+      padding: 24px 16px;
     }
+    #no-path-state .empty-icon { width: 48px; height: 48px; margin-bottom: 12px; opacity: 0.4; }
+    #no-path-state .empty-title { font-size: 12px; font-weight: 600; color: #6b7280; margin-bottom: 4px; }
+    #no-path-state .empty-hint { font-size: 10px; color: #9ca3af; line-height: 1.4; }
+
+    /* Path-selected panel */
+    #path-panel { display: none; }
+
     #path-info {
       font-size: 10px;
       color: #374151;
@@ -44,6 +52,178 @@
       border-radius: 4px;
       margin-bottom: 6px;
     }
+
+    /* Participant count badge */
+    .participant-badge {
+      display: inline-block;
+      font-size: 9px;
+      font-weight: 600;
+      background: #e0e7ff;
+      color: #4f46e5;
+      padding: 1px 6px;
+      border-radius: 8px;
+      margin-left: 4px;
+    }
+
+    /* ===== Mode Tabs ===== */
+    .mode-tabs {
+      display: flex;
+      gap: 2px;
+      background: #f4f4f5;
+      border-radius: 6px;
+      padding: 2px;
+      margin-bottom: 8px;
+    }
+    .mode-tab {
+      flex: 1;
+      padding: 5px 8px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 9px;
+      font-weight: 600;
+      color: #71717a;
+      background: transparent;
+      transition: all 0.15s;
+      text-align: center;
+    }
+    .mode-tab:hover { color: #374151; }
+    .mode-tab.active {
+      background: #fff;
+      color: #4f46e5;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+    }
+    .mode-panel { display: none; }
+    .mode-panel.active { display: block; }
+
+    /* ===== Simulation: segment cards ===== */
+    .seg-card {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 5px 6px;
+      margin-bottom: 3px;
+      background: #f9fafb;
+      border: 1px solid #e4e4e7;
+      border-radius: 5px;
+      font-size: 9px;
+      color: #374151;
+    }
+    .seg-card .seg-num {
+      width: 14px;
+      font-size: 8px;
+      font-weight: 700;
+      color: #a5b4fc;
+      text-align: center;
+      flex-shrink: 0;
+    }
+    .seg-card .seg-info {
+      flex: 1;
+      line-height: 1.35;
+    }
+    .seg-card .seg-info .seg-main { font-weight: 500; }
+    .seg-card .seg-info .seg-detail { font-size: 8px; color: #9ca3af; }
+    .seg-card .seg-remove {
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      font-size: 10px;
+      line-height: 18px;
+      text-align: center;
+      background: none;
+      color: #dc2626;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .seg-card .seg-remove:hover { background: #fef2f2; }
+
+    .seg-empty {
+      font-size: 9px;
+      color: #9ca3af;
+      text-align: center;
+      padding: 8px 0 4px;
+      font-style: italic;
+    }
+
+    /* ===== Simulation: add-segment form ===== */
+    .sim-form {
+      background: #fafbff;
+      border: 1px dashed #c7d2fe;
+      border-radius: 6px;
+      padding: 6px;
+      margin-top: 6px;
+    }
+    .sim-form-title {
+      font-size: 8px;
+      font-weight: 600;
+      color: #a5b4fc;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 4px;
+    }
+    .sim-row {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-bottom: 4px;
+    }
+    .sim-row label {
+      width: 50px;
+      font-size: 9px;
+      font-weight: 500;
+      color: #6b7280;
+      flex-shrink: 0;
+    }
+    .sim-row input[type="number"] {
+      flex: 1;
+      min-width: 0;
+      padding: 3px 5px;
+      border: 1px solid #e4e4e7;
+      border-radius: 4px;
+      font-size: 10px;
+      font-family: inherit;
+      color: #374151;
+      background: #fff;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .sim-row input[type="number"]:focus { border-color: #a5b4fc; }
+    .sim-row input[type="number"]::-webkit-inner-spin-button,
+    .sim-row input[type="number"]::-webkit-outer-spin-button { opacity: 1; }
+    .sim-row select {
+      width: 60px;
+      padding: 3px 3px;
+      border: 1px solid #e4e4e7;
+      border-radius: 4px;
+      font-size: 9px;
+      font-family: inherit;
+      color: #374151;
+      background: #fff;
+      cursor: pointer;
+      outline: none;
+      flex-shrink: 0;
+    }
+    .sim-row select:focus { border-color: #a5b4fc; }
+
+    /* Totals preview */
+    .sim-totals {
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      border-radius: 6px;
+      padding: 5px 8px;
+      margin-top: 6px;
+      font-size: 9px;
+      color: #166534;
+      line-height: 1.5;
+    }
+    .sim-totals.empty { background: #f9fafb; border-color: #e4e4e7; color: #9ca3af; }
+    .sim-totals .totals-line {
+      display: flex;
+      justify-content: space-between;
+    }
+    .sim-totals .totals-value { font-weight: 600; }
 
     /* Buttons */
     .btn {
@@ -56,25 +236,74 @@
       transition: all 0.15s;
       outline: none;
     }
-    .btn-default {
-      background: #f4f4f5;
-      color: #71717a;
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-default { background: #f4f4f5; color: #71717a; }
+    .btn-default:hover:not(:disabled) { background: #e4e4e7; }
+    .btn-primary { background: #4f46e5; color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #4338ca; }
+    .btn-success { background: #059669; color: #fff; }
+    .btn-success:hover:not(:disabled) { background: #047857; }
+    .btn-danger { background: #fef2f2; color: #dc2626; }
+    .btn-danger:hover:not(:disabled) { background: #fee2e2; }
+    .btn-small { padding: 2px 6px; font-size: 9px; }
+
+    .btn-cta {
+      background: #4f46e5;
+      color: #fff;
+      width: 100%;
+      padding: 8px 12px;
+      font-size: 10px;
+      font-weight: 600;
+      border-radius: 6px;
+      margin-top: 6px;
     }
-    .btn-default:hover { background: #e4e4e7; }
-    .btn-primary {
-      background: #e0e7ff;
-      color: #4f46e5;
-    }
-    .btn-primary:hover { background: #c7d2fe; }
-    .btn-danger {
-      background: #fef2f2;
-      color: #dc2626;
-    }
-    .btn-danger:hover { background: #fee2e2; }
-    .btn-small {
-      padding: 2px 6px;
+    .btn-cta:hover:not(:disabled) { background: #4338ca; }
+
+    .btn-add-seg {
+      background: #4f46e5;
+      color: #fff;
+      width: 100%;
+      padding: 5px 10px;
       font-size: 9px;
+      font-weight: 600;
+      border-radius: 5px;
+      margin-top: 2px;
     }
+    .btn-add-seg:hover:not(:disabled) { background: #4338ca; }
+
+    .btn-generate {
+      background: #059669;
+      color: #fff;
+      width: 100%;
+      padding: 7px 12px;
+      font-size: 10px;
+      font-weight: 600;
+      border-radius: 6px;
+      margin-top: 6px;
+    }
+    .btn-generate:hover:not(:disabled) { background: #047857; }
+
+    .update-banner {
+      display: none;
+      background: #fefce8;
+      border: 1px solid #fde68a;
+      border-radius: 6px;
+      padding: 6px 8px;
+      margin-top: 6px;
+      font-size: 9px;
+      color: #92400e;
+      text-align: center;
+    }
+    .update-banner .update-text { margin-bottom: 4px; }
+    .update-banner .btn-update {
+      background: #f59e0b;
+      color: #fff;
+      width: 100%;
+      padding: 5px 10px;
+      font-size: 10px;
+      font-weight: 600;
+    }
+    .update-banner .btn-update:hover { background: #d97706; }
 
     /* Slider */
     input[type="range"] {
@@ -88,25 +317,22 @@
     }
     input[type="range"]::-webkit-slider-thumb {
       -webkit-appearance: none;
-      width: 16px;
-      height: 16px;
+      width: 16px; height: 16px;
       background: #a5b4fc;
       border-radius: 50%;
       cursor: pointer;
       border: 2px solid white;
-      box-shadow: 0 0 2px rgba(0, 0, 0, 0.2);
+      box-shadow: 0 0 2px rgba(0,0,0,0.2);
     }
     input[type="range"]::-moz-range-thumb {
-      width: 16px;
-      height: 16px;
+      width: 16px; height: 16px;
       background: #a5b4fc;
       border-radius: 50%;
       cursor: pointer;
       border: 2px solid white;
-      box-shadow: 0 0 2px rgba(0, 0, 0, 0.2);
+      box-shadow: 0 0 2px rgba(0,0,0,0.2);
     }
 
-    /* Footprint row */
     .footprint-row {
       display: flex;
       align-items: center;
@@ -117,127 +343,181 @@
       border-radius: 4px;
       border: 1px solid #e4e4e7;
     }
-    .footprint-row .index {
-      width: 16px;
-      font-size: 9px;
-      color: #9ca3af;
-      text-align: center;
-    }
+    .footprint-row .index { width: 16px; font-size: 9px; color: #9ca3af; text-align: center; }
     .footprint-row input[type="range"] { flex: 1; }
     .footprint-row .t-value {
-      width: 32px;
-      text-align: right;
-      font-size: 9px;
-      font-weight: 500;
-      color: #6b7280;
+      width: 32px; text-align: right;
+      font-size: 9px; font-weight: 500; color: #6b7280;
     }
     .footprint-row .btn-remove {
-      width: 18px;
-      height: 18px;
-      padding: 0;
-      font-size: 10px;
-      line-height: 18px;
-      text-align: center;
-      background: none;
-      color: #dc2626;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
+      width: 18px; height: 18px; padding: 0;
+      font-size: 10px; line-height: 18px; text-align: center;
+      background: none; color: #dc2626; border: none;
+      border-radius: 4px; cursor: pointer;
     }
     .footprint-row .btn-remove:hover { background: #fef2f2; }
 
-    /* Format buttons */
     .format-btn { flex: none; padding: 4px 8px; }
     .format-btn.active { background: #e0e7ff; color: #4f46e5; }
 
-    /* Template buttons */
     .template-btn {
-      width: 36px;
-      height: 36px;
-      padding: 2px;
-      border-radius: 6px;
-      border: 1px solid #e4e4e7;
-      background: #fff;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      width: 36px; height: 36px; padding: 2px;
+      border-radius: 6px; border: 1px solid #e4e4e7;
+      background: #fff; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
       transition: all 0.15s;
     }
     .template-btn:hover { border-color: #a5b4fc; }
-    .template-btn.active {
-      border: 2px solid #a5b4fc;
-      background: #e0e7ff;
-    }
-    .template-btn span {
-      font-size: 7px;
-      color: #6b7280;
-      text-align: center;
-      line-height: 1.1;
-    }
+    .template-btn.active { border: 2px solid #a5b4fc; background: #e0e7ff; }
+    .template-btn span { font-size: 7px; color: #6b7280; text-align: center; line-height: 1.1; }
 
-    /* Status */
-    .status {
-      font-size: 9px;
-      color: #6b7280;
-      margin-top: 4px;
-    }
+    .status { font-size: 9px; color: #6b7280; margin-top: 4px; }
+    .action-row { display: flex; gap: 4px; margin-top: 6px; }
 
-    /* Action row */
-    .action-row {
-      display: flex;
-      gap: 4px;
-      margin-top: 6px;
+    .live-dot {
+      display: inline-block; width: 6px; height: 6px;
+      background: #22c55e; border-radius: 50%; margin-right: 3px;
+      animation: pulse 1.5s ease-in-out infinite;
     }
+    @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.4 } }
   </style>
 </head>
 <body>
-  <div id="info">Draw a path using the Path tool, select it, then use this panel.</div>
 
-  <div class="section">
-    <div class="section-title">Selected Path</div>
-    <div id="path-info">No path selected</div>
+  <!-- ==================== NO PATH SELECTED ==================== -->
+  <div id="no-path-state">
+    <svg class="empty-icon" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M10 38 C14 26, 20 14, 24 12 S34 18, 38 10" stroke="#d1d5db" stroke-width="2.5" stroke-linecap="round" fill="none" stroke-dasharray="4 3"/>
+      <circle cx="10" cy="38" r="3" fill="#d1d5db"/>
+      <circle cx="38" cy="10" r="3" fill="#d1d5db"/>
+      <rect x="20" y="20" width="8" height="14" rx="1" stroke="#d1d5db" stroke-width="1.5" fill="none"/>
+    </svg>
+    <div class="empty-title">No Path Selected</div>
+    <div class="empty-hint">Draw a path using the Path tool, then select it to place participants along it.</div>
   </div>
 
-  <div class="separator"></div>
+  <!-- ==================== PATH SELECTED PANEL ==================== -->
+  <div id="path-panel">
 
-  <div class="section">
-    <div class="section-title">Template</div>
-    <div id="template-grid" style="display: flex; gap: 4px; flex-wrap: wrap;"></div>
-  </div>
-
-  <div class="separator"></div>
-
-  <div class="section">
-    <div class="section-title">Variable Positioning</div>
-    <div id="footprint-list"></div>
-    <button class="btn btn-default" onclick="addFootprint()" style="margin-top: 4px;">+ Add Footprint</button>
-  </div>
-
-  <div class="separator"></div>
-
-  <div class="section">
-    <div class="action-row">
-      <button class="btn btn-primary" onclick="applyFootprints()" style="flex: 1;">Apply to Selected Path</button>
-      <button class="btn btn-danger" onclick="clearFootprints()">Clear All</button>
+    <div class="section">
+      <div class="section-title">Selected Path</div>
+      <div id="path-info">No path selected</div>
     </div>
-    <div class="status" id="status"></div>
-  </div>
+    <div class="separator"></div>
 
-  <div class="separator"></div>
-
-  <div class="section">
-    <div class="section-title">Export</div>
-    <div style="display: flex; gap: 4px; margin-bottom: 6px; flex-wrap: wrap;">
-      <button class="btn btn-default format-btn active" data-format="svg">SVG</button>
-      <button class="btn btn-default format-btn" data-format="png">PNG</button>
-      <button class="btn btn-default format-btn" data-format="jpeg">JPEG</button>
-      <button class="btn btn-default format-btn" data-format="pdf">PDF</button>
-      <button class="btn btn-default format-btn" data-format="eps">EPS</button>
-      <button class="btn btn-default format-btn" data-format="drawtonomy.svg">.drawtonomy.svg</button>
+    <div class="section">
+      <div class="section-title">Template</div>
+      <div id="template-grid" style="display: flex; gap: 4px; flex-wrap: wrap;"></div>
     </div>
-    <button class="btn btn-default" onclick="exportScene()" style="width: 100%;">Export</button>
-    <div class="status" id="export-status"></div>
+    <div class="separator"></div>
+
+    <!-- ==================== POSITIONING ==================== -->
+    <div class="section">
+      <div class="section-title">
+        Participants
+        <span class="participant-badge" id="participant-count">0</span>
+      </div>
+
+      <div class="mode-tabs">
+        <button class="mode-tab active" data-mode="manual" onclick="switchMode('manual')">Manual</button>
+        <button class="mode-tab" data-mode="simulation" onclick="switchMode('simulation')">Simulation</button>
+      </div>
+
+      <!-- ===== MANUAL MODE ===== -->
+      <div id="mode-manual" class="mode-panel active">
+        <div id="footprint-list"></div>
+        <div style="display: flex; gap: 4px; margin-top: 4px;">
+          <button class="btn btn-default" onclick="addFootprint()" style="flex:1;">+ Add Participant</button>
+          <button class="btn btn-danger btn-small" onclick="removeLastFootprint()" id="btn-remove-last" style="display:none;">− Remove Last</button>
+        </div>
+      </div>
+
+      <!-- ===== SIMULATION MODE ===== -->
+      <div id="mode-simulation" class="mode-panel">
+
+        <!-- Segment list -->
+        <div id="seg-list"></div>
+
+        <!-- Add segment form -->
+        <div class="sim-form">
+          <div class="sim-form-title">Add Segment</div>
+          <div class="sim-row">
+            <label>Speed</label>
+            <input type="number" id="seg-speed" value="30" min="0.01" step="any" />
+            <select id="seg-speed-unit">
+              <option value="km/h" selected>km/h</option>
+              <option value="m/s">m/s</option>
+              <option value="mph">mph</option>
+            </select>
+          </div>
+          <div class="sim-row">
+            <label>Duration</label>
+            <input type="number" id="seg-time" value="10" min="0.01" step="any" />
+            <select id="seg-time-unit">
+              <option value="s">sec</option>
+              <option value="min" selected>min</option>
+              <option value="hr">hr</option>
+            </select>
+          </div>
+          <div class="sim-row">
+            <label>Samples</label>
+            <input type="number" id="seg-rate" value="5" min="1" step="1" />
+            <select id="seg-rate-unit">
+              <option value="total" selected>total</option>
+              <option value="/s">/sec</option>
+              <option value="/min">/min</option>
+              <option value="/hr">/hr</option>
+            </select>
+          </div>
+          <button class="btn btn-add-seg" onclick="addSegment()">+ Add Segment</button>
+        </div>
+
+        <!-- Totals -->
+        <div class="sim-totals empty" id="sim-totals">
+          <div style="text-align:center;">Add segments to build a speed profile</div>
+        </div>
+
+        <!-- Generate -->
+        <button class="btn btn-generate" id="btn-generate" onclick="generateFromSimulation()" disabled>
+          ⚡ Generate Positions
+        </button>
+      </div>
+
+      <!-- ===== SHARED: Place / Update / Live ===== -->
+      <button class="btn btn-cta" id="btn-place" onclick="placeParticipants()" style="display:none;">
+        ▶ Place Participants on Path
+      </button>
+      <div class="update-banner" id="update-banner">
+        <div class="update-text">Participant count changed — update positions to sync.</div>
+        <button class="btn btn-update" onclick="updateParticipantPositions()">↻ Update Positions</button>
+      </div>
+      <div id="live-indicator" style="display:none; margin-top: 6px; font-size: 9px; color: #22c55e;">
+        <span class="live-dot"></span> Live — drag sliders to reposition
+      </div>
+    </div>
+    <div class="separator"></div>
+
+    <div class="section">
+      <div class="action-row">
+        <button class="btn btn-danger" onclick="clearFootprints()" style="flex:1;">Clear All Participants</button>
+      </div>
+      <div class="status" id="status"></div>
+    </div>
+    <div class="separator"></div>
+
+    <div class="section">
+      <div class="section-title">Export</div>
+      <div style="display: flex; gap: 4px; margin-bottom: 6px; flex-wrap: wrap;">
+        <button class="btn btn-default format-btn active" data-format="svg">SVG</button>
+        <button class="btn btn-default format-btn" data-format="png">PNG</button>
+        <button class="btn btn-default format-btn" data-format="jpeg">JPEG</button>
+        <button class="btn btn-default format-btn" data-format="pdf">PDF</button>
+        <button class="btn btn-default format-btn" data-format="eps">EPS</button>
+        <button class="btn btn-default format-btn" data-format="drawtonomy.svg">.drawtonomy.svg</button>
+      </div>
+      <button class="btn btn-default" onclick="exportScene()" style="width: 100%;">Export</button>
+      <div class="status" id="export-status"></div>
+    </div>
   </div>
 
   <script type="module" src="./src/main.ts"></script>
