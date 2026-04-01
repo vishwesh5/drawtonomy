@@ -1,7 +1,7 @@
 // Path Footprint Lab - Development extension for variable footprint positioning
-// Modified: Live slider updates, per-path state persistence, stateful UI, simulation mode
+// Segment-based simulation: piecewise speed profiles with per-segment sampling
 
-// --- Inline ExtensionClient (avoid npm dependency on unpublished SDK) ---
+// --- Inline ExtensionClient ---
 
 interface InitPayload {
   hostVersion: string
@@ -36,7 +36,6 @@ class ExtensionClient {
   }
 
   async waitForInit(): Promise<InitPayload> { return this.initPromise }
-
   addShapes(shapes: BaseShape[]) { this.send({ type: 'ext:shapes-add', payload: { shapes } }) }
   updateShapes(updates: Array<{ id: string; props: Record<string, unknown> }>) { this.send({ type: 'ext:shapes-update', payload: { updates } }) }
   deleteShapes(ids: string[]) { this.send({ type: 'ext:shapes-delete', payload: { ids } }) }
@@ -44,8 +43,7 @@ class ExtensionClient {
   async requestShapes(filter?: { types?: string[]; ids?: string[]; selectedOnly?: boolean }): Promise<BaseShape[]> {
     const requestId = this.nextRequestId()
     this.send({ type: 'ext:shapes-request', payload: { requestId, filter } })
-    const response = await this.waitForResponse(requestId) as { shapes: BaseShape[] }
-    return response.shapes
+    return ((await this.waitForResponse(requestId)) as { shapes: BaseShape[] }).shapes
   }
 
   async requestSelection(): Promise<{ ids: string[] }> {
@@ -65,36 +63,31 @@ class ExtensionClient {
     if (!data || typeof data !== 'object' || typeof data.type !== 'string' || !data.type.startsWith('ext:')) return
     if (data.type === 'ext:init') { this.initResolve(data.payload); return }
     if (data.type === 'ext:error' && data.payload?.requestId) {
-      const pending = this.pendingRequests.get(data.payload.requestId)
-      if (pending) { clearTimeout(pending.timeout); this.pendingRequests.delete(data.payload.requestId); pending.reject(new Error(data.payload.message)) }
+      const p = this.pendingRequests.get(data.payload.requestId)
+      if (p) { clearTimeout(p.timeout); this.pendingRequests.delete(data.payload.requestId); p.reject(new Error(data.payload.message)) }
       return
     }
-    const requestId = data.payload?.requestId
-    if (requestId) {
-      const pending = this.pendingRequests.get(requestId)
-      if (pending) { clearTimeout(pending.timeout); this.pendingRequests.delete(requestId); pending.resolve(data.payload) }
+    const rid = data.payload?.requestId
+    if (rid) {
+      const p = this.pendingRequests.get(rid)
+      if (p) { clearTimeout(p.timeout); this.pendingRequests.delete(rid); p.resolve(data.payload) }
     }
   }
 
   private nextRequestId(): string { return `${this.manifestId}_${++this.requestIdCounter}_${Date.now().toString(36)}` }
 
-  private waitForResponse(requestId: string): Promise<unknown> {
+  private waitForResponse(rid: string): Promise<unknown> {
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => { this.pendingRequests.delete(requestId); reject(new Error(`Request ${requestId} timed out`)) }, this.requestTimeout)
-      this.pendingRequests.set(requestId, { resolve, reject, timeout })
+      const timeout = setTimeout(() => { this.pendingRequests.delete(rid); reject(new Error(`Request ${rid} timed out`)) }, this.requestTimeout)
+      this.pendingRequests.set(rid, { resolve, reject, timeout })
     })
   }
 }
 
-// --- Inline geometry functions (avoid npm dependency on unpublished SDK) ---
+// --- Inline geometry ---
 
 interface Point2D { x: number; y: number }
-
-interface PathEvalResult {
-  position: Point2D
-  tangentAngleDeg: number
-  tangentVec: Point2D
-}
+interface PathEvalResult { position: Point2D; tangentAngleDeg: number; tangentVec: Point2D }
 
 function computeArcLengths(points: Point2D[]): number[] {
   if (points.length === 0) return []
@@ -114,17 +107,13 @@ function evaluatePathAt(points: Point2D[], t: number): PathEvalResult {
   const arcLengths = computeArcLengths(points)
   const totalLen = arcLengths[arcLengths.length - 1]
   if (totalLen === 0) return fallback
-
   const clampedT = Math.max(0, Math.min(1, t))
   const targetLen = clampedT * totalLen
-
   let lo = 0, hi = points.length - 2
   while (lo < hi) { const mid = (lo + hi) >> 1; if (arcLengths[mid + 1] < targetLen) lo = mid + 1; else hi = mid }
-
   const segStart = points[lo], segEnd = points[lo + 1]
   const segLen = arcLengths[lo + 1] - arcLengths[lo]
   const localT = segLen > 0 ? (targetLen - arcLengths[lo]) / segLen : 0
-
   const position: Point2D = { x: segStart.x + (segEnd.x - segStart.x) * localT, y: segStart.y + (segEnd.y - segStart.y) * localT }
   const dx = segEnd.x - segStart.x, dy = segEnd.y - segStart.y
   const len = Math.sqrt(dx * dx + dy * dy)
@@ -134,36 +123,38 @@ function evaluatePathAt(points: Point2D[], t: number): PathEvalResult {
   return { position, tangentAngleDeg, tangentVec }
 }
 
+
 // =============================================================================
-// SIMULATION ENGINE
+// SIMULATION ENGINE — Segment-based piecewise speed profiles
 // =============================================================================
-// 3-stage pipeline designed for future non-uniform speed profiles:
-//   Stage 1: computeTimeSamples()     — generate sample timestamps
-//   Stage 2: computeDistancesAtTimes() — integrate speed over time → cumulative distances
-//   Stage 3: computePathTValues()      — normalize distances → t ∈ [0, 1]
 //
-// For uniform speed, Stage 2 simplifies to d = v*t (and t-values become t_i/T).
-// For future variable speed segments, Stage 2 becomes piecewise integration:
-//   distance(t) = Σ speed_k × duration_k  (for each segment up to time t)
-// The pipeline structure doesn't change — only the internals of Stage 2.
+// Each segment defines a constant-speed phase:
+//   { speed, speedUnit, duration, durationUnit, samplingRate, samplingRateUnit }
+//
+// Pipeline (per segment, then concatenated):
+//   1. Resolve N_i samples and time window [T_start, T_end] for segment i
+//   2. Generate sample timestamps within the window
+//   3. Compute cumulative distance at each timestamp:
+//        dist(t) = prior_segments_distance + speed_i × (t - T_start_i)
+//   4. Normalize all distances by total distance → path t-values [0, 1]
+//
+// This naturally produces non-uniform spacing when segments have different speeds.
 // =============================================================================
 
 type SpeedUnit = 'km/h' | 'm/s' | 'mph'
 type TimeUnit = 's' | 'min' | 'hr'
 type SamplingRateUnit = 'total' | '/s' | '/min' | '/hr'
 
-interface SimulationConfig {
+interface SpeedSegment {
   speed: number
   speedUnit: SpeedUnit
-  totalTime: number
-  timeUnit: TimeUnit
+  duration: number
+  durationUnit: TimeUnit
   samplingRate: number
   samplingRateUnit: SamplingRateUnit
-  // Future: variable speed segments
-  // segments?: Array<{ startTimeSec: number; endTimeSec: number; speedMs: number }>
 }
 
-// --- Unit conversions (all to SI: m/s and seconds) ---
+// --- Unit conversions ---
 
 function speedToMs(value: number, unit: SpeedUnit): number {
   switch (unit) {
@@ -181,87 +172,20 @@ function timeToSeconds(value: number, unit: TimeUnit): number {
   }
 }
 
-function resolveParticipantCount(rate: number, rateUnit: SamplingRateUnit, totalTimeSec: number): number {
-  // 'total' means the rate value IS the total count directly
+function resolveCount(rate: number, rateUnit: SamplingRateUnit, durationSec: number): number {
   switch (rateUnit) {
     case 'total': return Math.max(1, Math.round(rate))
-    case '/s':    return Math.max(1, Math.round(rate * totalTimeSec))
-    case '/min':  return Math.max(1, Math.round(rate * (totalTimeSec / 60)))
-    case '/hr':   return Math.max(1, Math.round(rate * (totalTimeSec / 3600)))
+    case '/s':    return Math.max(1, Math.round(rate * durationSec))
+    case '/min':  return Math.max(1, Math.round(rate * (durationSec / 60)))
+    case '/hr':   return Math.max(1, Math.round(rate * (durationSec / 3600)))
   }
 }
 
-// --- Stage 1: Generate time samples ---
-function computeTimeSamples(totalTimeSec: number, numSamples: number): number[] {
-  // Evenly-spaced samples: t_1, t_2, ..., t_N  (excludes t=0, includes t=T)
-  // This means participant 1 is at the first interval mark, last is at end of path.
-  if (numSamples <= 0) return []
-  const interval = totalTimeSec / numSamples
-  const samples: number[] = []
-  for (let i = 1; i <= numSamples; i++) {
-    samples.push(i * interval)
-  }
-  return samples
-}
-
-// --- Stage 2: Compute cumulative distances at each time sample ---
-// Currently: uniform speed → distance = speed * time
-// Future: this function will accept a SpeedProfile and do piecewise integration
-function computeDistancesAtTimes(
-  timeSamples: number[],
-  speedMs: number,
-  _totalTimeSec: number,
-  // Future signature extension:
-  // segments?: Array<{ startTimeSec: number; endTimeSec: number; speedMs: number }>
-): number[] {
-  // Uniform speed: d(t) = v * t
-  return timeSamples.map(t => speedMs * t)
-}
-
-// --- Stage 3: Normalize distances to path t-values [0, 1] ---
-function computePathTValues(distances: number[], totalDistance: number): number[] {
-  if (totalDistance <= 0) return distances.map(() => 0)
-  return distances.map(d => Math.min(1, d / totalDistance))
-}
-
-// --- Orchestrator: full pipeline ---
-interface SimulationResult {
-  tValues: number[]
-  numParticipants: number
-  intervalSec: number
-  totalDistanceM: number
-  speedMs: number
-  totalTimeSec: number
-}
-
-function runSimulationPipeline(config: SimulationConfig): SimulationResult | { error: string } {
-  const speedMs = speedToMs(config.speed, config.speedUnit)
-  const totalTimeSec = timeToSeconds(config.totalTime, config.timeUnit)
-  const numParticipants = resolveParticipantCount(config.samplingRate, config.samplingRateUnit, totalTimeSec)
-
-  if (speedMs <= 0) return { error: 'Speed must be positive' }
-  if (totalTimeSec <= 0) return { error: 'Duration must be positive' }
-  if (numParticipants <= 0) return { error: 'At least 1 participant needed' }
-  if (numParticipants > 200) return { error: 'Max 200 participants' }
-
-  const totalDistanceM = speedMs * totalTimeSec
-  const intervalSec = totalTimeSec / numParticipants
-
-  // Stage 1
-  const timeSamples = computeTimeSamples(totalTimeSec, numParticipants)
-  // Stage 2
-  const distances = computeDistancesAtTimes(timeSamples, speedMs, totalTimeSec)
-  // Stage 3
-  const tValues = computePathTValues(distances, totalDistanceM)
-
-  return { tValues, numParticipants, intervalSec, totalDistanceM, speedMs, totalTimeSec }
-}
-
-// --- Display formatting helpers ---
+// --- Display formatting ---
 
 function formatDuration(seconds: number): string {
   if (seconds < 1) return `${(seconds * 1000).toFixed(0)} ms`
-  if (seconds < 60) return `${seconds.toFixed(1)} sec`
+  if (seconds < 60) return `${seconds.toFixed(1)} s`
   if (seconds < 3600) return `${(seconds / 60).toFixed(1)} min`
   return `${(seconds / 3600).toFixed(2)} hr`
 }
@@ -270,6 +194,97 @@ function formatDistance(meters: number): string {
   if (meters < 1) return `${(meters * 100).toFixed(1)} cm`
   if (meters < 1000) return `${meters.toFixed(1)} m`
   return `${(meters / 1000).toFixed(2)} km`
+}
+
+function formatSpeed(speedMs: number): string {
+  const kmh = speedMs * 3.6
+  if (kmh < 1) return `${speedMs.toFixed(2)} m/s`
+  return `${kmh.toFixed(1)} km/h`
+}
+
+// --- Pipeline ---
+
+interface SegmentComputed {
+  speedMs: number
+  durationSec: number
+  numSamples: number
+  distanceM: number
+  intervalSec: number
+  timeStartSec: number   // absolute start time
+}
+
+interface SimulationResult {
+  tValues: number[]
+  totalParticipants: number
+  totalDurationSec: number
+  totalDistanceM: number
+  segmentsComputed: SegmentComputed[]
+}
+
+function runSegmentPipeline(segments: SpeedSegment[]): SimulationResult | { error: string } {
+  if (segments.length === 0) return { error: 'Add at least one segment' }
+
+  // 1. Pre-compute each segment's resolved values
+  const computed: SegmentComputed[] = []
+  let cumulativeTime = 0
+  let totalParticipants = 0
+
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i]
+    const speedMs = speedToMs(seg.speed, seg.speedUnit)
+    const durationSec = timeToSeconds(seg.duration, seg.durationUnit)
+    const numSamples = resolveCount(seg.samplingRate, seg.samplingRateUnit, durationSec)
+
+    if (speedMs <= 0) return { error: `Segment ${i + 1}: speed must be positive` }
+    if (durationSec <= 0) return { error: `Segment ${i + 1}: duration must be positive` }
+
+    const distanceM = speedMs * durationSec
+    const intervalSec = durationSec / numSamples
+
+    computed.push({
+      speedMs,
+      durationSec,
+      numSamples,
+      distanceM,
+      intervalSec,
+      timeStartSec: cumulativeTime,
+    })
+
+    cumulativeTime += durationSec
+    totalParticipants += numSamples
+  }
+
+  if (totalParticipants > 200) return { error: `Too many participants (${totalParticipants}). Max 200.` }
+
+  const totalDurationSec = cumulativeTime
+  const totalDistanceM = computed.reduce((sum, c) => sum + c.distanceM, 0)
+
+  if (totalDistanceM <= 0) return { error: 'Total distance is zero' }
+
+  // 2. Generate sample timestamps and compute cumulative distances
+  const allDistances: number[] = []
+  let priorDistance = 0
+
+  for (const seg of computed) {
+    for (let j = 1; j <= seg.numSamples; j++) {
+      // Time within this segment: j * interval (excludes seg start, includes seg end)
+      const dt = j * seg.intervalSec
+      const cumulDist = priorDistance + seg.speedMs * dt
+      allDistances.push(cumulDist)
+    }
+    priorDistance += seg.distanceM
+  }
+
+  // 3. Normalize to t ∈ [0, 1]
+  const tValues = allDistances.map(d => Math.min(1, d / totalDistanceM))
+
+  return {
+    tValues,
+    totalParticipants,
+    totalDurationSec,
+    totalDistanceM,
+    segmentsComputed: computed,
+  }
 }
 
 
@@ -285,18 +300,10 @@ let selectedPathId: string | null = null
 let selectedPathPoints: Point2D[] = []
 let footprints: Array<{ t: number }> = []
 
-// Current positioning mode
 let activeMode: 'manual' | 'simulation' = 'manual'
 
-// Current simulation config (UI state)
-let simConfig: SimulationConfig = {
-  speed: 30,
-  speedUnit: 'km/h',
-  totalTime: 60,
-  timeUnit: 'min',
-  samplingRate: 10,
-  samplingRateUnit: 'total',
-}
+// Segment list for simulation mode
+let segments: SpeedSegment[] = []
 
 // Per-path state persistence
 interface PathState {
@@ -306,7 +313,7 @@ interface PathState {
   isPlaced: boolean
   needsUpdate: boolean
   activeMode: 'manual' | 'simulation'
-  simConfig: SimulationConfig
+  segments: SpeedSegment[]
 }
 const pathStateMap = new Map<string, PathState>()
 
@@ -315,7 +322,7 @@ let isPlaced = false
 let needsUpdate = false
 let placedShapeIds: string[] = []
 
-// Template definitions (matching host app)
+// Template definitions
 const TEMPLATES = [
   { id: 'sedan', name: 'Sedan', w: 30, h: 56, type: 'vehicle' as const, svg: '/templates/vehicle/sedan.svg', vbW: 25, vbH: 47 },
   { id: 'bus', name: 'Bus', w: 37, h: 92, type: 'vehicle' as const, svg: '/templates/vehicle/bus.svg', vbW: 341, vbH: 850 },
@@ -328,7 +335,6 @@ const TEMPLATES = [
   { id: 'walk', name: 'Walk', w: 22, h: 22, type: 'pedestrian' as const, svg: '/templates/pedestrian/pedestrian_walk.svg', vbW: 220, vbH: 220 },
   { id: 'simple', name: 'Simple', w: 22, h: 22, type: 'pedestrian' as const, svg: '/templates/pedestrian/pedestrian_simple.svg', vbW: 210, vbH: 210 },
 ]
-
 let selectedTemplate = TEMPLATES[0]
 
 
@@ -337,10 +343,8 @@ let selectedTemplate = TEMPLATES[0]
 // =============================================================================
 
 function showPanel(hasPath: boolean) {
-  const noPathState = document.getElementById('no-path-state')!
-  const pathPanel = document.getElementById('path-panel')!
-  noPathState.style.display = hasPath ? 'none' : 'flex'
-  pathPanel.style.display = hasPath ? 'block' : 'none'
+  document.getElementById('no-path-state')!.style.display = hasPath ? 'none' : 'flex'
+  document.getElementById('path-panel')!.style.display = hasPath ? 'block' : 'none'
 }
 
 function updateUIState() {
@@ -372,103 +376,126 @@ function updateUIState() {
   }
 }
 
-
-// =============================================================================
-// MODE SWITCHING
-// =============================================================================
-
 function switchMode(mode: 'manual' | 'simulation') {
   activeMode = mode
-
-  // Update tab UI
   document.querySelectorAll('.mode-tab').forEach(tab => {
     tab.classList.toggle('active', (tab as HTMLElement).dataset.mode === mode)
   })
-
-  // Update panel visibility
   document.getElementById('mode-manual')!.classList.toggle('active', mode === 'manual')
   document.getElementById('mode-simulation')!.classList.toggle('active', mode === 'simulation')
-
-  // Update preview when switching to simulation
   if (mode === 'simulation') {
-    updateSimPreview()
+    renderSegmentList()
+    updateTotals()
   }
-
   saveCurrentPathState()
 }
 
 
 // =============================================================================
-// SIMULATION UI
+// SEGMENT LIST UI
 // =============================================================================
 
-function readSimConfigFromUI(): SimulationConfig {
-  return {
-    speed: parseFloat((document.getElementById('sim-speed') as HTMLInputElement).value) || 0,
-    speedUnit: (document.getElementById('sim-speed-unit') as HTMLSelectElement).value as SpeedUnit,
-    totalTime: parseFloat((document.getElementById('sim-time') as HTMLInputElement).value) || 0,
-    timeUnit: (document.getElementById('sim-time-unit') as HTMLSelectElement).value as TimeUnit,
-    samplingRate: parseFloat((document.getElementById('sim-rate') as HTMLInputElement).value) || 0,
-    samplingRateUnit: (document.getElementById('sim-rate-unit') as HTMLSelectElement).value as SamplingRateUnit,
-  }
-}
+function renderSegmentList() {
+  const container = document.getElementById('seg-list')!
+  container.innerHTML = ''
 
-function writeSimConfigToUI(config: SimulationConfig) {
-  (document.getElementById('sim-speed') as HTMLInputElement).value = String(config.speed)
-  ;(document.getElementById('sim-speed-unit') as HTMLSelectElement).value = config.speedUnit
-  ;(document.getElementById('sim-time') as HTMLInputElement).value = String(config.totalTime)
-  ;(document.getElementById('sim-time-unit') as HTMLSelectElement).value = config.timeUnit
-  ;(document.getElementById('sim-rate') as HTMLInputElement).value = String(config.samplingRate)
-  ;(document.getElementById('sim-rate-unit') as HTMLSelectElement).value = config.samplingRateUnit
-}
-
-function onSimInputChange() {
-  simConfig = readSimConfigFromUI()
-  updateSimPreview()
-  saveCurrentPathState()
-}
-
-function updateSimPreview() {
-  const previewEl = document.getElementById('sim-preview')!
-  const countEl = document.getElementById('sim-preview-count')!
-  const intervalEl = document.getElementById('sim-preview-interval')!
-  const distanceEl = document.getElementById('sim-preview-distance')!
-
-  const result = runSimulationPipeline(simConfig)
-
-  if ('error' in result) {
-    previewEl.classList.add('error')
-    countEl.textContent = '—'
-    intervalEl.textContent = result.error
-    distanceEl.textContent = '—'
+  if (segments.length === 0) {
+    container.innerHTML = '<div class="seg-empty">No segments yet</div>'
     return
   }
 
-  previewEl.classList.remove('error')
-  countEl.textContent = `${result.numParticipants}`
-  intervalEl.textContent = formatDuration(result.intervalSec)
-  distanceEl.textContent = formatDistance(result.totalDistanceM)
+  segments.forEach((seg, i) => {
+    const speedMs = speedToMs(seg.speed, seg.speedUnit)
+    const durSec = timeToSeconds(seg.duration, seg.durationUnit)
+    const count = resolveCount(seg.samplingRate, seg.samplingRateUnit, durSec)
+    const dist = speedMs * durSec
+
+    const card = document.createElement('div')
+    card.className = 'seg-card'
+    card.innerHTML = `
+      <span class="seg-num">${i + 1}</span>
+      <div class="seg-info">
+        <div class="seg-main">${seg.speed} ${seg.speedUnit} × ${seg.duration} ${seg.durationUnit}</div>
+        <div class="seg-detail">${count} pts · ${formatDistance(dist)} · ${formatDuration(durSec / count)} interval</div>
+      </div>
+      <button class="seg-remove" data-index="${i}">&times;</button>
+    `
+
+    card.querySelector('.seg-remove')!.addEventListener('click', () => {
+      segments.splice(i, 1)
+      renderSegmentList()
+      updateTotals()
+      saveCurrentPathState()
+    })
+
+    container.appendChild(card)
+  })
+}
+
+function updateTotals() {
+  const totalsEl = document.getElementById('sim-totals')!
+  const generateBtn = document.getElementById('btn-generate') as HTMLButtonElement
+
+  if (segments.length === 0) {
+    totalsEl.className = 'sim-totals empty'
+    totalsEl.innerHTML = '<div style="text-align:center;">Add segments to build a speed profile</div>'
+    generateBtn.disabled = true
+    return
+  }
+
+  const result = runSegmentPipeline(segments)
+
+  if ('error' in result) {
+    totalsEl.className = 'sim-totals empty'
+    totalsEl.innerHTML = `<div style="text-align:center;color:#991b1b;">${result.error}</div>`
+    generateBtn.disabled = true
+    return
+  }
+
+  generateBtn.disabled = false
+  totalsEl.className = 'sim-totals'
+  totalsEl.innerHTML = `
+    <div class="totals-line"><span>Total participants</span><span class="totals-value">${result.totalParticipants}</span></div>
+    <div class="totals-line"><span>Total duration</span><span class="totals-value">${formatDuration(result.totalDurationSec)}</span></div>
+    <div class="totals-line"><span>Total distance</span><span class="totals-value">${formatDistance(result.totalDistanceM)}</span></div>
+    <div class="totals-line"><span>Segments</span><span class="totals-value">${segments.length}</span></div>
+  `
+}
+
+function addSegment() {
+  const speed = parseFloat((document.getElementById('seg-speed') as HTMLInputElement).value) || 0
+  const speedUnit = (document.getElementById('seg-speed-unit') as HTMLSelectElement).value as SpeedUnit
+  const duration = parseFloat((document.getElementById('seg-time') as HTMLInputElement).value) || 0
+  const durationUnit = (document.getElementById('seg-time-unit') as HTMLSelectElement).value as TimeUnit
+  const samplingRate = parseFloat((document.getElementById('seg-rate') as HTMLInputElement).value) || 0
+  const samplingRateUnit = (document.getElementById('seg-rate-unit') as HTMLSelectElement).value as SamplingRateUnit
+
+  if (speed <= 0 || duration <= 0 || samplingRate <= 0) {
+    setStatus('All segment values must be positive')
+    return
+  }
+
+  segments.push({ speed, speedUnit, duration, durationUnit, samplingRate, samplingRateUnit })
+  renderSegmentList()
+  updateTotals()
+  saveCurrentPathState()
 }
 
 function generateFromSimulation() {
-  simConfig = readSimConfigFromUI()
-  const result = runSimulationPipeline(simConfig)
+  const result = runSegmentPipeline(segments)
 
   if ('error' in result) {
-    setStatus(`Simulation error: ${result.error}`)
+    setStatus(`Error: ${result.error}`)
     return
   }
 
-  // Cancel any pending live update from previous state
   cancelLiveUpdate()
 
-  // If shapes were previously placed, this is an update
   const wasPlaced = isPlaced
 
-  // Replace footprints with simulation-generated t-values
   footprints = result.tValues.map(t => ({ t: parseFloat(t.toFixed(4)) }))
 
-  // Switch to manual view to show generated sliders (user can fine-tune)
+  // Switch to manual to show generated sliders for fine-tuning
   switchMode('manual')
   renderFootprintList()
 
@@ -478,8 +505,11 @@ function generateFromSimulation() {
   updateUIState()
   saveCurrentPathState()
 
-  setStatus(`Generated ${result.numParticipants} positions (${formatDuration(result.intervalSec)} interval, ${formatDistance(result.totalDistanceM)} total)`)
-  client.notify(`${result.numParticipants} positions generated from simulation`, 'success')
+  const segSummary = result.segmentsComputed.map((s, i) =>
+    `Seg${i + 1}: ${formatSpeed(s.speedMs)}×${formatDuration(s.durationSec)}→${s.numSamples}pts`
+  ).join(' | ')
+  setStatus(`Generated ${result.totalParticipants} positions. ${segSummary}`)
+  client.notify(`${result.totalParticipants} positions generated from ${segments.length} segment(s)`, 'success')
 }
 
 
@@ -496,7 +526,7 @@ function saveCurrentPathState() {
     isPlaced,
     needsUpdate,
     activeMode,
-    simConfig: { ...simConfig },
+    segments: segments.map(s => ({ ...s })),
   })
 }
 
@@ -505,24 +535,19 @@ function restorePathState(pathId: string) {
   if (saved) {
     footprints = saved.footprints.map(f => ({ t: f.t }))
     const tmpl = TEMPLATES.find(t => t.id === saved.templateId)
-    if (tmpl) { selectedTemplate = tmpl }
+    if (tmpl) selectedTemplate = tmpl
     placedShapeIds = [...saved.placedShapeIds]
     isPlaced = saved.isPlaced
     needsUpdate = saved.needsUpdate
     activeMode = saved.activeMode
-    simConfig = { ...saved.simConfig }
+    segments = saved.segments.map(s => ({ ...s }))
   } else {
-    // New path — start fresh
     footprints = []
     placedShapeIds = []
     isPlaced = false
     needsUpdate = false
     activeMode = 'manual'
-    simConfig = {
-      speed: 30, speedUnit: 'km/h',
-      totalTime: 60, timeUnit: 'min',
-      samplingRate: 10, samplingRateUnit: 'total',
-    }
+    segments = []
   }
 }
 
@@ -535,9 +560,7 @@ function hostUrl(path: string): string {
   try {
     const parentOrigin = document.referrer ? new URL(document.referrer).origin : window.location.origin
     return parentOrigin + path
-  } catch {
-    return path
-  }
+  } catch { return path }
 }
 
 function renderTemplateGrid() {
@@ -547,13 +570,9 @@ function renderTemplateGrid() {
     const btn = document.createElement('button')
     btn.className = `template-btn${tmpl.id === selectedTemplate.id ? ' active' : ''}`
     btn.title = tmpl.name
-
-    const maxSize = 24
-    const aspect = tmpl.vbW / tmpl.vbH
+    const maxSize = 24, aspect = tmpl.vbW / tmpl.vbH
     let iconW = maxSize, iconH = maxSize
-    if (aspect > 1) { iconH = Math.round(maxSize / aspect) }
-    else { iconW = Math.round(maxSize * aspect) }
-
+    if (aspect > 1) iconH = Math.round(maxSize / aspect); else iconW = Math.round(maxSize * aspect)
     if (tmpl.svg) {
       const isPed = tmpl.type === 'pedestrian'
       const style = isPed
@@ -565,12 +584,7 @@ function renderTemplateGrid() {
     } else {
       btn.innerHTML = `<span>${tmpl.name}</span>`
     }
-
-    btn.addEventListener('click', () => {
-      selectedTemplate = tmpl
-      renderTemplateGrid()
-      saveCurrentPathState()
-    })
+    btn.addEventListener('click', () => { selectedTemplate = tmpl; renderTemplateGrid(); saveCurrentPathState() })
     container.appendChild(btn)
   })
 }
@@ -588,47 +602,27 @@ function renderFootprintList() {
       <span class="t-value">${fp.t.toFixed(2)}</span>
       <button class="btn-remove" data-index="${i}">&times;</button>
     `
-
     const slider = row.querySelector('input')!
     slider.addEventListener('input', (e) => {
       const idx = parseInt((e.target as HTMLInputElement).dataset.index!)
       footprints[idx].t = parseFloat((e.target as HTMLInputElement).value)
       row.querySelector('.t-value')!.textContent = footprints[idx].t.toFixed(2)
-
-      // Live update: reposition shapes on slider drag if placed and in sync
-      if (isPlaced && !needsUpdate) {
-        debouncedLiveUpdate()
-      }
-
-      // Persist state
+      if (isPlaced && !needsUpdate) debouncedLiveUpdate()
       saveCurrentPathState()
     })
-
     const removeBtn = row.querySelector('button')!
     removeBtn.addEventListener('click', (e) => {
       const idx = parseInt((e.target as HTMLButtonElement).dataset.index!)
       footprints.splice(idx, 1)
       renderFootprintList()
-
-      // Cancel any pending/in-flight live update
       cancelLiveUpdate()
-
-      // If shapes are placed, count mismatch means we need update
-      if (isPlaced) {
-        needsUpdate = true
-      }
-      if (footprints.length === 0) {
-        clearPlacedShapes()
-        isPlaced = false
-        needsUpdate = false
-      }
+      if (isPlaced) { needsUpdate = true }
+      if (footprints.length === 0) { clearPlacedShapes(); isPlaced = false; needsUpdate = false }
       updateUIState()
       saveCurrentPathState()
     })
-
     container.appendChild(row)
   })
-
   updateUIState()
 }
 
@@ -647,59 +641,42 @@ let liveUpdateDirty = false
 let liveUpdateAborted = false
 
 function cancelLiveUpdate() {
-  if (liveDebounceTimer) {
-    clearTimeout(liveDebounceTimer)
-    liveDebounceTimer = null
-  }
+  if (liveDebounceTimer) { clearTimeout(liveDebounceTimer); liveDebounceTimer = null }
   liveUpdateAborted = true
   liveUpdateDirty = false
 }
 
 function debouncedLiveUpdate() {
   if (liveDebounceTimer) clearTimeout(liveDebounceTimer)
-  liveDebounceTimer = setTimeout(() => {
-    liveDebounceTimer = null
-    runLiveUpdate()
-  }, 120)
+  liveDebounceTimer = setTimeout(() => { liveDebounceTimer = null; runLiveUpdate() }, 120)
 }
 
 async function runLiveUpdate() {
   if (!selectedPathId || selectedPathPoints.length < 2) return
   if (!isPlaced || needsUpdate) return
   if (footprints.length === 0) return
-
-  if (liveUpdateBusy) {
-    liveUpdateDirty = true
-    return
-  }
+  if (liveUpdateBusy) { liveUpdateDirty = true; return }
 
   liveUpdateBusy = true
   liveUpdateDirty = false
   liveUpdateAborted = false
-
   const pathId = selectedPathId
 
   try {
     if (liveUpdateAborted) return
-
     const freshShapes = await client.requestShapes({ ids: [pathId] })
     if (liveUpdateAborted) return
-
     const freshPath = freshShapes.find(s => s.id === pathId)
     if (freshPath) {
       const dp = freshPath.props._displayPoints as Point2D[] | undefined
-      if (dp && dp.length >= 2) {
-        selectedPathPoints = dp
-      }
+      if (dp && dp.length >= 2) selectedPathPoints = dp
     }
-
     if (liveUpdateAborted) return
 
     if (placedShapeIds.length > 0) {
       client.deleteShapes(placedShapeIds)
-      await new Promise(resolve => setTimeout(resolve, 150))
+      await new Promise(r => setTimeout(r, 150))
     }
-
     if (liveUpdateAborted) return
 
     const sorted = [...footprints].sort((a, b) => a.t - b.t)
@@ -708,211 +685,127 @@ async function runLiveUpdate() {
     const attrSubtype = selectedTemplate.type === 'pedestrian' ? 'person' : 'car'
 
     const shapes: BaseShape[] = sorted.map(fp => {
-      const evalResult = evaluatePathAt(selectedPathPoints, fp.t)
+      const ev = evaluatePathAt(selectedPathPoints, fp.t)
       return {
-        id: nextId('fp'),
-        type: shapeType,
-        x: evalResult.position.x,
-        y: evalResult.position.y,
-        rotation: evalResult.tangentAngleDeg,
+        id: nextId('fp'), type: shapeType,
+        x: ev.position.x, y: ev.position.y, rotation: ev.tangentAngleDeg,
         zIndex: shapeType === 'pedestrian' ? 3000 : 4000,
         props: {
-          w: selectedTemplate.w,
-          h: selectedTemplate.h,
-          color: 'black',
-          size: 'm',
-          opacity: 1,
+          w: selectedTemplate.w, h: selectedTemplate.h,
+          color: 'black', size: 'm', opacity: 1,
           attributes: { type: attrType, subtype: attrSubtype },
-          osmId: '',
-          templateId: selectedTemplate.id,
-          parentPathId: pathId,
+          osmId: '', templateId: selectedTemplate.id, parentPathId: pathId,
         },
       }
     })
-
     client.addShapes(shapes)
-
-    await new Promise(resolve => setTimeout(resolve, 350))
+    await new Promise(r => setTimeout(r, 350))
     if (liveUpdateAborted) return
 
-    const queryTypes = ['vehicle', 'pedestrian']
     let allOfType: BaseShape[] = []
-    for (const qt of queryTypes) {
-      const found = await client.requestShapes({ types: [qt] })
-      allOfType = allOfType.concat(found)
+    for (const qt of ['vehicle', 'pedestrian']) {
+      allOfType = allOfType.concat(await client.requestShapes({ types: [qt] }))
     }
-
     if (liveUpdateAborted) return
 
-    const newFpIds = allOfType
-      .filter(s => s.props.parentPathId === pathId)
-      .map(s => s.id)
+    placedShapeIds = allOfType.filter(s => s.props.parentPathId === pathId).map(s => s.id)
 
-    placedShapeIds = newFpIds
-
-    if (newFpIds.length > 0) {
+    if (placedShapeIds.length > 0) {
       const arcLengths = computeArcLengths(selectedPathPoints)
       const totalLen = arcLengths[arcLengths.length - 1]
-      const interval = sorted.length > 1
-        ? Math.round(totalLen / (sorted.length - 1))
-        : Math.round(totalLen)
-
+      const interval = sorted.length > 1 ? Math.round(totalLen / (sorted.length - 1)) : Math.round(totalLen)
       client.updateShapes([{
         id: pathId,
         props: {
-          footprint: {
-            interval,
-            offset: 0,
-            templateId: selectedTemplate.id,
-            anchorOffset: 0,
-            mode: 'variable',
-            tValues: sorted.map(f => f.t),
-          },
-          footprintIds: newFpIds,
+          footprint: { interval, offset: 0, templateId: selectedTemplate.id, anchorOffset: 0, mode: 'variable', tValues: sorted.map(f => f.t) },
+          footprintIds: placedShapeIds,
         },
       }])
     }
-
     saveCurrentPathState()
   } catch (e) {
     console.warn('[FootprintLab] Live update error:', e)
   } finally {
     liveUpdateBusy = false
-    if (!liveUpdateAborted && liveUpdateDirty) {
-      liveUpdateDirty = false
-      runLiveUpdate()
-    }
+    if (!liveUpdateAborted && liveUpdateDirty) { liveUpdateDirty = false; runLiveUpdate() }
   }
 }
 
 
 // =============================================================================
-// FULL RE-PLACE SHAPES (used by Place/Update buttons)
+// FULL RE-PLACE SHAPES
 // =============================================================================
 
 async function fullRePlaceShapes() {
-  if (!selectedPathId || selectedPathPoints.length < 2) return
-  if (footprints.length === 0) return
-
+  if (!selectedPathId || selectedPathPoints.length < 2) return 0
+  if (footprints.length === 0) return 0
   try {
     const freshShapes = await client.requestShapes({ ids: [selectedPathId] })
     const freshPath = freshShapes.find(s => s.id === selectedPathId)
     if (freshPath) {
       const dp = freshPath.props._displayPoints as Point2D[] | undefined
-      if (dp && dp.length >= 2) {
-        selectedPathPoints = dp
-      }
+      if (dp && dp.length >= 2) selectedPathPoints = dp
     }
-
     await clearPlacedShapes()
 
     const sorted = [...footprints].sort((a, b) => a.t - b.t)
     const arcLengths = computeArcLengths(selectedPathPoints)
     const totalLen = arcLengths[arcLengths.length - 1]
-    const interval = sorted.length > 1
-      ? Math.round(totalLen / (sorted.length - 1))
-      : Math.round(totalLen)
+    const interval = sorted.length > 1 ? Math.round(totalLen / (sorted.length - 1)) : Math.round(totalLen)
 
     const shapeType = selectedTemplate.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
     const attrType = selectedTemplate.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
     const attrSubtype = selectedTemplate.type === 'pedestrian' ? 'person' : 'car'
 
-    const shapes: BaseShape[] = []
-    for (const fp of sorted) {
-      const evalResult = evaluatePathAt(selectedPathPoints, fp.t)
-      const id = nextId('fp')
-      shapes.push({
-        id,
-        type: shapeType,
-        x: evalResult.position.x,
-        y: evalResult.position.y,
-        rotation: evalResult.tangentAngleDeg,
+    const shapes: BaseShape[] = sorted.map(fp => {
+      const ev = evaluatePathAt(selectedPathPoints, fp.t)
+      return {
+        id: nextId('fp'), type: shapeType,
+        x: ev.position.x, y: ev.position.y, rotation: ev.tangentAngleDeg,
         zIndex: shapeType === 'pedestrian' ? 3000 : 4000,
         props: {
-          w: selectedTemplate.w,
-          h: selectedTemplate.h,
-          color: 'black',
-          size: 'm',
-          opacity: 1,
+          w: selectedTemplate.w, h: selectedTemplate.h,
+          color: 'black', size: 'm', opacity: 1,
           attributes: { type: attrType, subtype: attrSubtype },
-          osmId: '',
-          templateId: selectedTemplate.id,
-          parentPathId: selectedPathId,
+          osmId: '', templateId: selectedTemplate.id, parentPathId: selectedPathId,
         },
-      })
-    }
-
+      }
+    })
     client.addShapes(shapes)
+    await new Promise(r => setTimeout(r, 500))
 
-    await new Promise(resolve => setTimeout(resolve, 500))
-
-    const queryTypes = ['vehicle', 'pedestrian']
     let allOfType: BaseShape[] = []
-    for (const qt of queryTypes) {
-      const found = await client.requestShapes({ types: [qt] })
-      allOfType = allOfType.concat(found)
+    for (const qt of ['vehicle', 'pedestrian']) {
+      allOfType = allOfType.concat(await client.requestShapes({ types: [qt] }))
     }
-    const newFpIds = allOfType
-      .filter(s => s.props.parentPathId === selectedPathId)
-      .map(s => s.id)
+    placedShapeIds = allOfType.filter(s => s.props.parentPathId === selectedPathId).map(s => s.id)
 
-    placedShapeIds = newFpIds
-
-    if (newFpIds.length > 0) {
+    if (placedShapeIds.length > 0) {
       client.updateShapes([{
         id: selectedPathId,
         props: {
-          footprint: {
-            interval,
-            offset: 0,
-            templateId: selectedTemplate.id,
-            anchorOffset: 0,
-            mode: 'variable',
-            tValues: sorted.map(f => f.t),
-          },
-          footprintIds: newFpIds,
+          footprint: { interval, offset: 0, templateId: selectedTemplate.id, anchorOffset: 0, mode: 'variable', tValues: sorted.map(f => f.t) },
+          footprintIds: placedShapeIds,
         },
       }])
     }
-
-    isPlaced = true
-    needsUpdate = false
-    updateUIState()
-    saveCurrentPathState()
-
-    return newFpIds.length
-  } catch (e) {
-    setStatus(`Error: ${e}`)
-    return 0
-  }
+    isPlaced = true; needsUpdate = false
+    updateUIState(); saveCurrentPathState()
+    return placedShapeIds.length
+  } catch (e) { setStatus(`Error: ${e}`); return 0 }
 }
 
 async function clearPlacedShapes() {
   if (!selectedPathId) return
-
   try {
-    const existingVehicles = await client.requestShapes({ types: ['vehicle'] })
-    const existingPeds = await client.requestShapes({ types: ['pedestrian'] })
-    const allExisting = [...existingVehicles, ...existingPeds]
-    const existingFpIds = allExisting
-      .filter(s => s.props.parentPathId === selectedPathId)
-      .map(s => s.id)
-
-    if (existingFpIds.length > 0) {
-      client.deleteShapes(existingFpIds)
-      await new Promise(resolve => setTimeout(resolve, 200))
-    }
-
-    client.updateShapes([{
-      id: selectedPathId,
-      props: { footprintIds: [] },
-    }])
-    await new Promise(resolve => setTimeout(resolve, 100))
-
+    let all: BaseShape[] = []
+    for (const qt of ['vehicle', 'pedestrian']) all = all.concat(await client.requestShapes({ types: [qt] }))
+    const ids = all.filter(s => s.props.parentPathId === selectedPathId).map(s => s.id)
+    if (ids.length > 0) { client.deleteShapes(ids); await new Promise(r => setTimeout(r, 200)) }
+    client.updateShapes([{ id: selectedPathId, props: { footprintIds: [] } }])
+    await new Promise(r => setTimeout(r, 100))
     placedShapeIds = []
-  } catch (e) {
-    console.warn('[FootprintLab] Error clearing shapes:', e)
-  }
+  } catch (e) { console.warn('[FootprintLab] Error clearing shapes:', e) }
 }
 
 
@@ -926,33 +819,20 @@ async function refreshSelection() {
     if (selection.ids.length === 0) {
       saveCurrentPathState()
       document.getElementById('path-info')!.textContent = 'No path selected'
-      selectedPathId = null
-      selectedPathPoints = []
-      showPanel(false)
-      return
+      selectedPathId = null; selectedPathPoints = []; showPanel(false); return
     }
-
     const shapes = await client.requestShapes({ ids: selection.ids })
     const path = shapes.find(s => s.type === 'linestring' && s.props.isPath)
-
     if (!path) {
       document.getElementById('path-info')!.textContent = 'Selected shape is not a path'
-      selectedPathId = null
-      selectedPathPoints = []
-      showPanel(false)
-      return
+      selectedPathId = null; selectedPathPoints = []; showPanel(false); return
     }
 
     const previousPathId = selectedPathId
-    if (previousPathId && previousPathId !== path.id) {
-      saveCurrentPathState()
-    }
-
+    if (previousPathId && previousPathId !== path.id) saveCurrentPathState()
     selectedPathId = path.id
 
     const displayPoints = path.props._displayPoints as Point2D[] | undefined
-    console.log('[FootprintLab] _displayPoints:', displayPoints ? displayPoints.length + ' points' : 'undefined', 'props keys:', Object.keys(path.props))
-
     if (displayPoints && displayPoints.length >= 2) {
       selectedPathPoints = displayPoints
     } else {
@@ -964,7 +844,6 @@ async function refreshSelection() {
       }).filter(p => p.x !== 0 || p.y !== 0)
     }
 
-    // Restore state for this path
     restorePathState(path.id)
 
     const smoothed = displayPoints ? ' (smoothed)' : ' (raw)'
@@ -973,112 +852,57 @@ async function refreshSelection() {
     showPanel(true)
     renderTemplateGrid()
     renderFootprintList()
-
-    // Restore mode tab and simulation UI
     switchMode(activeMode)
-    writeSimConfigToUI(simConfig)
-    updateSimPreview()
-
+    renderSegmentList()
+    updateTotals()
     updateUIState()
     setStatus('Path selected')
-  } catch (e) {
-    setStatus(`Error: ${e}`)
-  }
+  } catch (e) { setStatus(`Error: ${e}`) }
 }
 
 function addFootprint() {
   const maxT = footprints.length > 0 ? Math.max(...footprints.map(f => f.t)) : 0
-  const newT = Math.min(1, maxT + 0.1)
-  footprints.push({ t: parseFloat(newT.toFixed(2)) })
+  footprints.push({ t: parseFloat(Math.min(1, maxT + 0.1).toFixed(2)) })
   renderFootprintList()
-
   cancelLiveUpdate()
-
-  if (isPlaced) {
-    needsUpdate = true
-  }
-  updateUIState()
-  saveCurrentPathState()
+  if (isPlaced) needsUpdate = true
+  updateUIState(); saveCurrentPathState()
 }
 
 function removeLastFootprint() {
   if (footprints.length === 0) return
-  footprints.pop()
-  renderFootprintList()
-
-  cancelLiveUpdate()
-
+  footprints.pop(); renderFootprintList(); cancelLiveUpdate()
   if (isPlaced) {
-    if (footprints.length === 0) {
-      clearPlacedShapes()
-      isPlaced = false
-      needsUpdate = false
-    } else {
-      needsUpdate = true
-    }
+    if (footprints.length === 0) { clearPlacedShapes(); isPlaced = false; needsUpdate = false }
+    else needsUpdate = true
   }
-  updateUIState()
-  saveCurrentPathState()
+  updateUIState(); saveCurrentPathState()
 }
 
 async function placeParticipants() {
-  if (!selectedPathId || selectedPathPoints.length < 2) {
-    setStatus('Select a path first')
-    return
-  }
-  if (footprints.length === 0) {
-    setStatus('Add at least one participant')
-    return
-  }
-
+  if (!selectedPathId || selectedPathPoints.length < 2) { setStatus('Select a path first'); return }
+  if (footprints.length === 0) { setStatus('Add at least one participant'); return }
   setStatus('Placing participants...')
   const count = await fullRePlaceShapes()
-  if (count && count > 0) {
-    client.notify(`${count} participants placed`, 'success')
-    setStatus(`Placed ${count} participants — drag sliders to reposition`)
-  }
+  if (count > 0) { client.notify(`${count} participants placed`, 'success'); setStatus(`Placed ${count} participants — drag sliders to reposition`) }
 }
 
 async function updateParticipantPositions() {
-  if (!selectedPathId || selectedPathPoints.length < 2) {
-    setStatus('Select a path first')
-    return
-  }
-  if (footprints.length === 0) {
-    setStatus('Add at least one participant')
-    return
-  }
-
+  if (!selectedPathId || selectedPathPoints.length < 2) { setStatus('Select a path first'); return }
+  if (footprints.length === 0) { setStatus('Add at least one participant'); return }
   setStatus('Updating positions...')
   const count = await fullRePlaceShapes()
-  if (count && count > 0) {
-    client.notify(`${count} positions updated`, 'success')
-    setStatus(`Updated ${count} participants — drag sliders to reposition`)
-  }
+  if (count > 0) { client.notify(`${count} positions updated`, 'success'); setStatus(`Updated ${count} participants — drag sliders to reposition`) }
 }
 
 async function clearFootprints() {
-  if (!selectedPathId) {
-    setStatus('Select a path first')
-    return
-  }
-
+  if (!selectedPathId) { setStatus('Select a path first'); return }
   try {
     await clearPlacedShapes()
-    footprints = []
-    placedShapeIds = []
-    isPlaced = false
-    needsUpdate = false
-
-    renderFootprintList()
-    updateUIState()
-    saveCurrentPathState()
-
-    client.notify('All participants cleared', 'info')
-    setStatus('Cleared')
-  } catch (e) {
-    setStatus(`Error: ${e}`)
-  }
+    footprints = []; placedShapeIds = []; isPlaced = false; needsUpdate = false
+    renderFootprintList(); updateUIState(); saveCurrentPathState()
+    client.notify('All participants cleared', 'info'); setStatus('Cleared')
+  } catch (e) { setStatus(`Error: ${e}`) }
 }
 
 let selectedExportFormat = 'svg'
@@ -1100,23 +924,15 @@ async function exportScene() {
     const requestId = 'export_' + Date.now().toString(36)
     const result = await new Promise<{ filename: string }>((resolve, reject) => {
       const handler = (event: MessageEvent) => {
-        if (event.data?.type === 'ext:export-response' && event.data?.payload?.requestId === requestId) {
-          window.removeEventListener('message', handler)
-          resolve(event.data.payload)
-        }
-        if (event.data?.type === 'ext:error' && event.data?.payload?.requestId === requestId) {
-          window.removeEventListener('message', handler)
-          reject(new Error(event.data.payload.message))
-        }
+        if (event.data?.type === 'ext:export-response' && event.data?.payload?.requestId === requestId) { window.removeEventListener('message', handler); resolve(event.data.payload) }
+        if (event.data?.type === 'ext:error' && event.data?.payload?.requestId === requestId) { window.removeEventListener('message', handler); reject(new Error(event.data.payload.message)) }
       }
       window.addEventListener('message', handler)
       window.parent.postMessage({ type: 'ext:export-request', payload: { requestId, format: selectedExportFormat } }, '*')
       setTimeout(() => reject(new Error('timeout')), 30000)
     })
     exportStatus.textContent = `Exported ${result.filename}`
-  } catch (e) {
-    exportStatus.textContent = `Error: ${e}`
-  }
+  } catch (e) { exportStatus.textContent = `Error: ${e}` }
 }
 
 
@@ -1133,16 +949,15 @@ async function exportScene() {
 ;(window as any).exportScene = exportScene
 ;(window as any).renderFootprintList = renderFootprintList
 ;(window as any).switchMode = switchMode
-;(window as any).onSimInputChange = onSimInputChange
+;(window as any).addSegment = addSegment
 ;(window as any).generateFromSimulation = generateFromSimulation
 
-// Expose state for debugging
 Object.defineProperty(window, 'selectedPathPoints', { get: () => selectedPathPoints })
 Object.defineProperty(window, 'selectedPathId', { get: () => selectedPathId })
 Object.defineProperty(window, 'footprints', { get: () => footprints, set: (v) => { footprints.length = 0; footprints.push(...v) } })
 Object.defineProperty(window, 'pathStateMap', { get: () => pathStateMap })
 Object.defineProperty(window, 'placedShapeIds', { get: () => placedShapeIds })
-Object.defineProperty(window, 'simConfig', { get: () => simConfig })
+Object.defineProperty(window, 'segments', { get: () => segments })
 
 
 // =============================================================================
@@ -1156,40 +971,23 @@ async function pollSelection() {
   try {
     const selection = await client.requestSelection()
     const currentId = selection.ids.length > 0 ? selection.ids[0] : null
-
     if (currentId !== lastSelectionId) {
       lastSelectionId = currentId
       if (currentId) {
-        if (deselectionGraceTimer) {
-          clearTimeout(deselectionGraceTimer)
-          deselectionGraceTimer = null
-        }
+        if (deselectionGraceTimer) { clearTimeout(deselectionGraceTimer); deselectionGraceTimer = null }
         const shapes = await client.requestShapes({ ids: [currentId] })
         const path = shapes.find(s => s.type === 'linestring' && s.props.isPath)
-        if (path) {
-          if (path.id !== selectedPathId) {
-            await refreshSelection()
-          }
-        } else if (selectedPathId) {
-          // Selected something that's not a path — keep current panel
-        }
+        if (path) { if (path.id !== selectedPathId) await refreshSelection() }
       } else {
         if (!deselectionGraceTimer && selectedPathId) {
           deselectionGraceTimer = setTimeout(() => {
             deselectionGraceTimer = null
-            if (lastSelectionId === null) {
-              saveCurrentPathState()
-              selectedPathId = null
-              selectedPathPoints = []
-              showPanel(false)
-            }
+            if (lastSelectionId === null) { saveCurrentPathState(); selectedPathId = null; selectedPathPoints = []; showPanel(false) }
           }, 600)
         }
       }
     }
-  } catch {
-    // Ignore polling errors
-  }
+  } catch { /* ignore */ }
 }
 
 
@@ -1201,14 +999,10 @@ async function main() {
   client = new ExtensionClient('path-footprint-lab')
   const init = await client.waitForInit()
   console.log('Path Footprint Lab connected:', init.grantedCapabilities)
-
   showPanel(false)
-
   renderTemplateGrid()
   renderFootprintList()
   initFormatButtons()
-  updateSimPreview()
-
   setInterval(pollSelection, 500)
 }
 
