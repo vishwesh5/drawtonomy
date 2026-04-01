@@ -4,6 +4,8 @@ import type {
   ShapeFilter,
   BaseShape,
   DrawtonomySnapshot,
+  ExportFormat,
+  ExportResponse,
 } from './types'
 
 interface PendingRequest {
@@ -70,6 +72,19 @@ export class ExtensionClient {
     this.send({ type: 'ext:snapshot-request', payload: { requestId } })
     const response = await this.waitForResponse(requestId) as { snapshot: DrawtonomySnapshot }
     return response.snapshot
+  }
+
+  // --- snapshot:export ---
+
+  /**
+   * Export the scene in the specified format.
+   * When `returnData` is true, returns a Base64 data URI string instead of triggering a file download.
+   * Requires `snapshot:export` capability.
+   */
+  async requestExport(format: ExportFormat, options?: { returnData?: boolean }): Promise<ExportResponse> {
+    const requestId = this.nextRequestId()
+    this.send({ type: 'ext:export-request', payload: { requestId, format, returnData: options?.returnData } })
+    return await this.waitForResponse(requestId) as ExportResponse
   }
 
   // --- viewport:read ---
