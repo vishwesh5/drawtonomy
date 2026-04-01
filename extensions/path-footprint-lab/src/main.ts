@@ -1,5 +1,5 @@
 // Path Footprint Lab - Development extension for variable footprint positioning
-// Modified: Live slider updates, per-path state persistence, stateful UI
+// Modified: Live slider updates, per-path state persistence, stateful UI, simulation mode
 
 // --- Inline ExtensionClient (avoid npm dependency on unpublished SDK) ---
 
@@ -134,7 +134,148 @@ function evaluatePathAt(points: Point2D[], t: number): PathEvalResult {
   return { position, tangentAngleDeg, tangentVec }
 }
 
-// --- State ---
+// =============================================================================
+// SIMULATION ENGINE
+// =============================================================================
+// 3-stage pipeline designed for future non-uniform speed profiles:
+//   Stage 1: computeTimeSamples()     — generate sample timestamps
+//   Stage 2: computeDistancesAtTimes() — integrate speed over time → cumulative distances
+//   Stage 3: computePathTValues()      — normalize distances → t ∈ [0, 1]
+//
+// For uniform speed, Stage 2 simplifies to d = v*t (and t-values become t_i/T).
+// For future variable speed segments, Stage 2 becomes piecewise integration:
+//   distance(t) = Σ speed_k × duration_k  (for each segment up to time t)
+// The pipeline structure doesn't change — only the internals of Stage 2.
+// =============================================================================
+
+type SpeedUnit = 'km/h' | 'm/s' | 'mph'
+type TimeUnit = 's' | 'min' | 'hr'
+type SamplingRateUnit = 'total' | '/s' | '/min' | '/hr'
+
+interface SimulationConfig {
+  speed: number
+  speedUnit: SpeedUnit
+  totalTime: number
+  timeUnit: TimeUnit
+  samplingRate: number
+  samplingRateUnit: SamplingRateUnit
+  // Future: variable speed segments
+  // segments?: Array<{ startTimeSec: number; endTimeSec: number; speedMs: number }>
+}
+
+// --- Unit conversions (all to SI: m/s and seconds) ---
+
+function speedToMs(value: number, unit: SpeedUnit): number {
+  switch (unit) {
+    case 'km/h': return value / 3.6
+    case 'm/s':  return value
+    case 'mph':  return value * 0.44704
+  }
+}
+
+function timeToSeconds(value: number, unit: TimeUnit): number {
+  switch (unit) {
+    case 's':   return value
+    case 'min': return value * 60
+    case 'hr':  return value * 3600
+  }
+}
+
+function resolveParticipantCount(rate: number, rateUnit: SamplingRateUnit, totalTimeSec: number): number {
+  // 'total' means the rate value IS the total count directly
+  switch (rateUnit) {
+    case 'total': return Math.max(1, Math.round(rate))
+    case '/s':    return Math.max(1, Math.round(rate * totalTimeSec))
+    case '/min':  return Math.max(1, Math.round(rate * (totalTimeSec / 60)))
+    case '/hr':   return Math.max(1, Math.round(rate * (totalTimeSec / 3600)))
+  }
+}
+
+// --- Stage 1: Generate time samples ---
+function computeTimeSamples(totalTimeSec: number, numSamples: number): number[] {
+  // Evenly-spaced samples: t_1, t_2, ..., t_N  (excludes t=0, includes t=T)
+  // This means participant 1 is at the first interval mark, last is at end of path.
+  if (numSamples <= 0) return []
+  const interval = totalTimeSec / numSamples
+  const samples: number[] = []
+  for (let i = 1; i <= numSamples; i++) {
+    samples.push(i * interval)
+  }
+  return samples
+}
+
+// --- Stage 2: Compute cumulative distances at each time sample ---
+// Currently: uniform speed → distance = speed * time
+// Future: this function will accept a SpeedProfile and do piecewise integration
+function computeDistancesAtTimes(
+  timeSamples: number[],
+  speedMs: number,
+  _totalTimeSec: number,
+  // Future signature extension:
+  // segments?: Array<{ startTimeSec: number; endTimeSec: number; speedMs: number }>
+): number[] {
+  // Uniform speed: d(t) = v * t
+  return timeSamples.map(t => speedMs * t)
+}
+
+// --- Stage 3: Normalize distances to path t-values [0, 1] ---
+function computePathTValues(distances: number[], totalDistance: number): number[] {
+  if (totalDistance <= 0) return distances.map(() => 0)
+  return distances.map(d => Math.min(1, d / totalDistance))
+}
+
+// --- Orchestrator: full pipeline ---
+interface SimulationResult {
+  tValues: number[]
+  numParticipants: number
+  intervalSec: number
+  totalDistanceM: number
+  speedMs: number
+  totalTimeSec: number
+}
+
+function runSimulationPipeline(config: SimulationConfig): SimulationResult | { error: string } {
+  const speedMs = speedToMs(config.speed, config.speedUnit)
+  const totalTimeSec = timeToSeconds(config.totalTime, config.timeUnit)
+  const numParticipants = resolveParticipantCount(config.samplingRate, config.samplingRateUnit, totalTimeSec)
+
+  if (speedMs <= 0) return { error: 'Speed must be positive' }
+  if (totalTimeSec <= 0) return { error: 'Duration must be positive' }
+  if (numParticipants <= 0) return { error: 'At least 1 participant needed' }
+  if (numParticipants > 200) return { error: 'Max 200 participants' }
+
+  const totalDistanceM = speedMs * totalTimeSec
+  const intervalSec = totalTimeSec / numParticipants
+
+  // Stage 1
+  const timeSamples = computeTimeSamples(totalTimeSec, numParticipants)
+  // Stage 2
+  const distances = computeDistancesAtTimes(timeSamples, speedMs, totalTimeSec)
+  // Stage 3
+  const tValues = computePathTValues(distances, totalDistanceM)
+
+  return { tValues, numParticipants, intervalSec, totalDistanceM, speedMs, totalTimeSec }
+}
+
+// --- Display formatting helpers ---
+
+function formatDuration(seconds: number): string {
+  if (seconds < 1) return `${(seconds * 1000).toFixed(0)} ms`
+  if (seconds < 60) return `${seconds.toFixed(1)} sec`
+  if (seconds < 3600) return `${(seconds / 60).toFixed(1)} min`
+  return `${(seconds / 3600).toFixed(2)} hr`
+}
+
+function formatDistance(meters: number): string {
+  if (meters < 1) return `${(meters * 100).toFixed(1)} cm`
+  if (meters < 1000) return `${meters.toFixed(1)} m`
+  return `${(meters / 1000).toFixed(2)} km`
+}
+
+
+// =============================================================================
+// STATE
+// =============================================================================
 
 let idCounter = 0
 function nextId(prefix = 'fplab'): string { return `${prefix}_${++idCounter}_${Date.now().toString(36)}` }
@@ -144,20 +285,35 @@ let selectedPathId: string | null = null
 let selectedPathPoints: Point2D[] = []
 let footprints: Array<{ t: number }> = []
 
+// Current positioning mode
+let activeMode: 'manual' | 'simulation' = 'manual'
+
+// Current simulation config (UI state)
+let simConfig: SimulationConfig = {
+  speed: 30,
+  speedUnit: 'km/h',
+  totalTime: 60,
+  timeUnit: 'min',
+  samplingRate: 10,
+  samplingRateUnit: 'total',
+}
+
 // Per-path state persistence
 interface PathState {
   footprints: Array<{ t: number }>
   templateId: string
-  placedShapeIds: string[]  // IDs of shapes currently on canvas for this path
-  isPlaced: boolean         // whether participants have been placed at least once
-  needsUpdate: boolean      // whether participant count changed since last place/update
+  placedShapeIds: string[]
+  isPlaced: boolean
+  needsUpdate: boolean
+  activeMode: 'manual' | 'simulation'
+  simConfig: SimulationConfig
 }
 const pathStateMap = new Map<string, PathState>()
 
 // UI state tracking
-let isPlaced = false          // have shapes been placed on canvas for current path?
-let needsUpdate = false       // participant count changed since last place/update?
-let placedShapeIds: string[] = []  // shape IDs currently on canvas
+let isPlaced = false
+let needsUpdate = false
+let placedShapeIds: string[] = []
 
 // Template definitions (matching host app)
 const TEMPLATES = [
@@ -175,7 +331,10 @@ const TEMPLATES = [
 
 let selectedTemplate = TEMPLATES[0]
 
-// --- UI State Management ---
+
+// =============================================================================
+// UI STATE MANAGEMENT
+// =============================================================================
 
 function showPanel(hasPath: boolean) {
   const noPathState = document.getElementById('no-path-state')!
@@ -192,34 +351,141 @@ function updateUIState() {
   const participantCount = document.getElementById('participant-count')!
 
   participantCount.textContent = String(footprints.length)
-
-  // Show/hide remove-last button
   btnRemoveLast.style.display = footprints.length > 0 ? 'inline-block' : 'none'
 
   if (footprints.length === 0) {
-    // No participants at all
     btnPlace.style.display = 'none'
     updateBanner.style.display = 'none'
     liveIndicator.style.display = 'none'
   } else if (!isPlaced) {
-    // Participants added but never placed on canvas
     btnPlace.style.display = 'block'
     updateBanner.style.display = 'none'
     liveIndicator.style.display = 'none'
   } else if (needsUpdate) {
-    // Placed, but participant count changed — need update
     btnPlace.style.display = 'none'
     updateBanner.style.display = 'block'
     liveIndicator.style.display = 'none'
   } else {
-    // Placed and in sync — live slider mode
     btnPlace.style.display = 'none'
     updateBanner.style.display = 'none'
     liveIndicator.style.display = 'block'
   }
 }
 
-// --- Save / Restore per-path state ---
+
+// =============================================================================
+// MODE SWITCHING
+// =============================================================================
+
+function switchMode(mode: 'manual' | 'simulation') {
+  activeMode = mode
+
+  // Update tab UI
+  document.querySelectorAll('.mode-tab').forEach(tab => {
+    tab.classList.toggle('active', (tab as HTMLElement).dataset.mode === mode)
+  })
+
+  // Update panel visibility
+  document.getElementById('mode-manual')!.classList.toggle('active', mode === 'manual')
+  document.getElementById('mode-simulation')!.classList.toggle('active', mode === 'simulation')
+
+  // Update preview when switching to simulation
+  if (mode === 'simulation') {
+    updateSimPreview()
+  }
+
+  saveCurrentPathState()
+}
+
+
+// =============================================================================
+// SIMULATION UI
+// =============================================================================
+
+function readSimConfigFromUI(): SimulationConfig {
+  return {
+    speed: parseFloat((document.getElementById('sim-speed') as HTMLInputElement).value) || 0,
+    speedUnit: (document.getElementById('sim-speed-unit') as HTMLSelectElement).value as SpeedUnit,
+    totalTime: parseFloat((document.getElementById('sim-time') as HTMLInputElement).value) || 0,
+    timeUnit: (document.getElementById('sim-time-unit') as HTMLSelectElement).value as TimeUnit,
+    samplingRate: parseFloat((document.getElementById('sim-rate') as HTMLInputElement).value) || 0,
+    samplingRateUnit: (document.getElementById('sim-rate-unit') as HTMLSelectElement).value as SamplingRateUnit,
+  }
+}
+
+function writeSimConfigToUI(config: SimulationConfig) {
+  (document.getElementById('sim-speed') as HTMLInputElement).value = String(config.speed)
+  ;(document.getElementById('sim-speed-unit') as HTMLSelectElement).value = config.speedUnit
+  ;(document.getElementById('sim-time') as HTMLInputElement).value = String(config.totalTime)
+  ;(document.getElementById('sim-time-unit') as HTMLSelectElement).value = config.timeUnit
+  ;(document.getElementById('sim-rate') as HTMLInputElement).value = String(config.samplingRate)
+  ;(document.getElementById('sim-rate-unit') as HTMLSelectElement).value = config.samplingRateUnit
+}
+
+function onSimInputChange() {
+  simConfig = readSimConfigFromUI()
+  updateSimPreview()
+  saveCurrentPathState()
+}
+
+function updateSimPreview() {
+  const previewEl = document.getElementById('sim-preview')!
+  const countEl = document.getElementById('sim-preview-count')!
+  const intervalEl = document.getElementById('sim-preview-interval')!
+  const distanceEl = document.getElementById('sim-preview-distance')!
+
+  const result = runSimulationPipeline(simConfig)
+
+  if ('error' in result) {
+    previewEl.classList.add('error')
+    countEl.textContent = '—'
+    intervalEl.textContent = result.error
+    distanceEl.textContent = '—'
+    return
+  }
+
+  previewEl.classList.remove('error')
+  countEl.textContent = `${result.numParticipants}`
+  intervalEl.textContent = formatDuration(result.intervalSec)
+  distanceEl.textContent = formatDistance(result.totalDistanceM)
+}
+
+function generateFromSimulation() {
+  simConfig = readSimConfigFromUI()
+  const result = runSimulationPipeline(simConfig)
+
+  if ('error' in result) {
+    setStatus(`Simulation error: ${result.error}`)
+    return
+  }
+
+  // Cancel any pending live update from previous state
+  cancelLiveUpdate()
+
+  // If shapes were previously placed, this is an update
+  const wasPlaced = isPlaced
+
+  // Replace footprints with simulation-generated t-values
+  footprints = result.tValues.map(t => ({ t: parseFloat(t.toFixed(4)) }))
+
+  // Switch to manual view to show generated sliders (user can fine-tune)
+  switchMode('manual')
+  renderFootprintList()
+
+  if (wasPlaced) {
+    needsUpdate = true
+  }
+  updateUIState()
+  saveCurrentPathState()
+
+  setStatus(`Generated ${result.numParticipants} positions (${formatDuration(result.intervalSec)} interval, ${formatDistance(result.totalDistanceM)} total)`)
+  client.notify(`${result.numParticipants} positions generated from simulation`, 'success')
+}
+
+
+// =============================================================================
+// SAVE / RESTORE PER-PATH STATE
+// =============================================================================
 
 function saveCurrentPathState() {
   if (!selectedPathId) return
@@ -229,6 +495,8 @@ function saveCurrentPathState() {
     placedShapeIds: [...placedShapeIds],
     isPlaced,
     needsUpdate,
+    activeMode,
+    simConfig: { ...simConfig },
   })
 }
 
@@ -241,16 +509,27 @@ function restorePathState(pathId: string) {
     placedShapeIds = [...saved.placedShapeIds]
     isPlaced = saved.isPlaced
     needsUpdate = saved.needsUpdate
+    activeMode = saved.activeMode
+    simConfig = { ...saved.simConfig }
   } else {
     // New path — start fresh
     footprints = []
     placedShapeIds = []
     isPlaced = false
     needsUpdate = false
+    activeMode = 'manual'
+    simConfig = {
+      speed: 30, speedUnit: 'km/h',
+      totalTime: 60, timeUnit: 'min',
+      samplingRate: 10, samplingRateUnit: 'total',
+    }
   }
 }
 
-// --- UI ---
+
+// =============================================================================
+// UI RENDERING
+// =============================================================================
 
 function hostUrl(path: string): string {
   try {
@@ -339,7 +618,6 @@ function renderFootprintList() {
         needsUpdate = true
       }
       if (footprints.length === 0) {
-        // All removed — clear shapes too
         clearPlacedShapes()
         isPlaced = false
         needsUpdate = false
@@ -358,24 +636,21 @@ function setStatus(msg: string) {
   document.getElementById('status')!.textContent = msg
 }
 
-// --- Live Update (debounced delete-and-recreate) ---
-// updateShapes only modifies props — it cannot move top-level x/y/rotation.
-// So we debounce slider drags and do a full delete→add cycle.
-// A busy-lock + dirty-flag prevents overlapping async operations.
-// An abort flag lets addFootprint/removeLastFootprint cancel mid-flight ops.
+
+// =============================================================================
+// LIVE UPDATE (debounced delete-and-recreate)
+// =============================================================================
 
 let liveDebounceTimer: ReturnType<typeof setTimeout> | null = null
 let liveUpdateBusy = false
 let liveUpdateDirty = false
 let liveUpdateAborted = false
 
-/** Cancel any pending or in-flight live update. Safe to call anytime. */
 function cancelLiveUpdate() {
   if (liveDebounceTimer) {
     clearTimeout(liveDebounceTimer)
     liveDebounceTimer = null
   }
-  // Signal in-flight runLiveUpdate to bail out at its next checkpoint
   liveUpdateAborted = true
   liveUpdateDirty = false
 }
@@ -385,7 +660,7 @@ function debouncedLiveUpdate() {
   liveDebounceTimer = setTimeout(() => {
     liveDebounceTimer = null
     runLiveUpdate()
-  }, 120) // 120ms — fires after user pauses dragging
+  }, 120)
 }
 
 async function runLiveUpdate() {
@@ -393,7 +668,6 @@ async function runLiveUpdate() {
   if (!isPlaced || needsUpdate) return
   if (footprints.length === 0) return
 
-  // If already running, mark dirty so we re-run when done
   if (liveUpdateBusy) {
     liveUpdateDirty = true
     return
@@ -403,18 +677,13 @@ async function runLiveUpdate() {
   liveUpdateDirty = false
   liveUpdateAborted = false
 
-  // Capture path ID at the start — if the host momentarily deselects (e.g. when
-  // the user clicks in the iframe), selectedPathId can become null mid-await.
-  // Using a local copy keeps the operation consistent.
   const pathId = selectedPathId
 
   try {
-    // --- Checkpoint: abort if cancelled before we touch anything ---
     if (liveUpdateAborted) return
 
-    // 1. Refresh displayPoints to get latest path coordinates
     const freshShapes = await client.requestShapes({ ids: [pathId] })
-    if (liveUpdateAborted) return  // checkpoint after await
+    if (liveUpdateAborted) return
 
     const freshPath = freshShapes.find(s => s.id === pathId)
     if (freshPath) {
@@ -424,17 +693,15 @@ async function runLiveUpdate() {
       }
     }
 
-    if (liveUpdateAborted) return  // checkpoint
+    if (liveUpdateAborted) return
 
-    // 2. Delete existing shapes on this path
     if (placedShapeIds.length > 0) {
       client.deleteShapes(placedShapeIds)
       await new Promise(resolve => setTimeout(resolve, 150))
     }
 
-    if (liveUpdateAborted) return  // checkpoint — critical: shapes are deleted, don't leave orphans
+    if (liveUpdateAborted) return
 
-    // 3. Build new shapes at current slider positions
     const sorted = [...footprints].sort((a, b) => a.t - b.t)
     const shapeType = selectedTemplate.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
     const attrType = selectedTemplate.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
@@ -458,17 +725,15 @@ async function runLiveUpdate() {
           attributes: { type: attrType, subtype: attrSubtype },
           osmId: '',
           templateId: selectedTemplate.id,
-          parentPathId: pathId,  // <-- use captured pathId, NOT selectedPathId
+          parentPathId: pathId,
         },
       }
     })
 
     client.addShapes(shapes)
 
-    // 4. Wait and query for remapped IDs
     await new Promise(resolve => setTimeout(resolve, 350))
-
-    if (liveUpdateAborted) return  // checkpoint
+    if (liveUpdateAborted) return
 
     const queryTypes = ['vehicle', 'pedestrian']
     let allOfType: BaseShape[] = []
@@ -477,15 +742,14 @@ async function runLiveUpdate() {
       allOfType = allOfType.concat(found)
     }
 
-    if (liveUpdateAborted) return  // checkpoint
+    if (liveUpdateAborted) return
 
     const newFpIds = allOfType
-      .filter(s => s.props.parentPathId === pathId)  // <-- use captured pathId
+      .filter(s => s.props.parentPathId === pathId)
       .map(s => s.id)
 
     placedShapeIds = newFpIds
 
-    // 5. Update path footprint config
     if (newFpIds.length > 0) {
       const arcLengths = computeArcLengths(selectedPathPoints)
       const totalLen = arcLengths[arcLengths.length - 1]
@@ -494,7 +758,7 @@ async function runLiveUpdate() {
         : Math.round(totalLen)
 
       client.updateShapes([{
-        id: pathId,  // <-- use captured pathId
+        id: pathId,
         props: {
           footprint: {
             interval,
@@ -514,7 +778,6 @@ async function runLiveUpdate() {
     console.warn('[FootprintLab] Live update error:', e)
   } finally {
     liveUpdateBusy = false
-    // If slider moved again while we were busy (and not aborted), re-run
     if (!liveUpdateAborted && liveUpdateDirty) {
       liveUpdateDirty = false
       runLiveUpdate()
@@ -522,13 +785,16 @@ async function runLiveUpdate() {
   }
 }
 
-// Fallback: delete and re-create shapes (used when updateShapes can't move position)
+
+// =============================================================================
+// FULL RE-PLACE SHAPES (used by Place/Update buttons)
+// =============================================================================
+
 async function fullRePlaceShapes() {
   if (!selectedPathId || selectedPathPoints.length < 2) return
   if (footprints.length === 0) return
 
   try {
-    // Refresh displayPoints
     const freshShapes = await client.requestShapes({ ids: [selectedPathId] })
     const freshPath = freshShapes.find(s => s.id === selectedPathId)
     if (freshPath) {
@@ -538,10 +804,8 @@ async function fullRePlaceShapes() {
       }
     }
 
-    // Delete existing shapes
     await clearPlacedShapes()
 
-    // Create new shapes
     const sorted = [...footprints].sort((a, b) => a.t - b.t)
     const arcLengths = computeArcLengths(selectedPathPoints)
     const totalLen = arcLengths[arcLengths.length - 1]
@@ -580,18 +844,20 @@ async function fullRePlaceShapes() {
 
     client.addShapes(shapes)
 
-    // Wait and find remapped IDs
     await new Promise(resolve => setTimeout(resolve, 500))
 
-    const queryType = selectedTemplate.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
-    const allOfType = await client.requestShapes({ types: [queryType] })
+    const queryTypes = ['vehicle', 'pedestrian']
+    let allOfType: BaseShape[] = []
+    for (const qt of queryTypes) {
+      const found = await client.requestShapes({ types: [qt] })
+      allOfType = allOfType.concat(found)
+    }
     const newFpIds = allOfType
       .filter(s => s.props.parentPathId === selectedPathId)
       .map(s => s.id)
 
     placedShapeIds = newFpIds
 
-    // Update path with footprint config
     if (newFpIds.length > 0) {
       client.updateShapes([{
         id: selectedPathId,
@@ -625,7 +891,6 @@ async function clearPlacedShapes() {
   if (!selectedPathId) return
 
   try {
-    // Find all shapes belonging to this path
     const existingVehicles = await client.requestShapes({ types: ['vehicle'] })
     const existingPeds = await client.requestShapes({ types: ['pedestrian'] })
     const allExisting = [...existingVehicles, ...existingPeds]
@@ -638,7 +903,6 @@ async function clearPlacedShapes() {
       await new Promise(resolve => setTimeout(resolve, 200))
     }
 
-    // Clear footprint config on path
     client.updateShapes([{
       id: selectedPathId,
       props: { footprintIds: [] },
@@ -651,13 +915,15 @@ async function clearPlacedShapes() {
   }
 }
 
-// --- Actions ---
+
+// =============================================================================
+// ACTIONS
+// =============================================================================
 
 async function refreshSelection() {
   try {
     const selection = await client.requestSelection()
     if (selection.ids.length === 0) {
-      // Save state of previous path before clearing
       saveCurrentPathState()
       document.getElementById('path-info')!.textContent = 'No path selected'
       selectedPathId = null
@@ -678,14 +944,12 @@ async function refreshSelection() {
     }
 
     const previousPathId = selectedPathId
-    // Save previous path state
     if (previousPathId && previousPathId !== path.id) {
       saveCurrentPathState()
     }
 
     selectedPathId = path.id
 
-    // Use smoothed display points if available
     const displayPoints = path.props._displayPoints as Point2D[] | undefined
     console.log('[FootprintLab] _displayPoints:', displayPoints ? displayPoints.length + ' points' : 'undefined', 'props keys:', Object.keys(path.props))
 
@@ -709,6 +973,12 @@ async function refreshSelection() {
     showPanel(true)
     renderTemplateGrid()
     renderFootprintList()
+
+    // Restore mode tab and simulation UI
+    switchMode(activeMode)
+    writeSimConfigToUI(simConfig)
+    updateSimPreview()
+
     updateUIState()
     setStatus('Path selected')
   } catch (e) {
@@ -722,10 +992,8 @@ function addFootprint() {
   footprints.push({ t: parseFloat(newT.toFixed(2)) })
   renderFootprintList()
 
-  // Cancel any pending/in-flight live update so it doesn't delete shapes mid-add
   cancelLiveUpdate()
 
-  // If already placed, adding a new participant means count changed
   if (isPlaced) {
     needsUpdate = true
   }
@@ -738,7 +1006,6 @@ function removeLastFootprint() {
   footprints.pop()
   renderFootprintList()
 
-  // Cancel any pending/in-flight live update
   cancelLiveUpdate()
 
   if (isPlaced) {
@@ -754,7 +1021,6 @@ function removeLastFootprint() {
   saveCurrentPathState()
 }
 
-// First-time placement
 async function placeParticipants() {
   if (!selectedPathId || selectedPathPoints.length < 2) {
     setStatus('Select a path first')
@@ -773,7 +1039,6 @@ async function placeParticipants() {
   }
 }
 
-// Re-sync after adding/removing participants
 async function updateParticipantPositions() {
   if (!selectedPathId || selectedPathPoints.length < 2) {
     setStatus('Select a path first')
@@ -854,7 +1119,10 @@ async function exportScene() {
   }
 }
 
-// --- Expose to window for inline onclick handlers and debugging ---
+
+// =============================================================================
+// EXPOSE TO WINDOW
+// =============================================================================
 
 ;(window as any).refreshSelection = refreshSelection
 ;(window as any).addFootprint = addFootprint
@@ -864,6 +1132,9 @@ async function exportScene() {
 ;(window as any).clearFootprints = clearFootprints
 ;(window as any).exportScene = exportScene
 ;(window as any).renderFootprintList = renderFootprintList
+;(window as any).switchMode = switchMode
+;(window as any).onSimInputChange = onSimInputChange
+;(window as any).generateFromSimulation = generateFromSimulation
 
 // Expose state for debugging
 Object.defineProperty(window, 'selectedPathPoints', { get: () => selectedPathPoints })
@@ -871,8 +1142,12 @@ Object.defineProperty(window, 'selectedPathId', { get: () => selectedPathId })
 Object.defineProperty(window, 'footprints', { get: () => footprints, set: (v) => { footprints.length = 0; footprints.push(...v) } })
 Object.defineProperty(window, 'pathStateMap', { get: () => pathStateMap })
 Object.defineProperty(window, 'placedShapeIds', { get: () => placedShapeIds })
+Object.defineProperty(window, 'simConfig', { get: () => simConfig })
 
-// --- Auto-detect selection ---
+
+// =============================================================================
+// AUTO-DETECT SELECTION
+// =============================================================================
 
 let lastSelectionId: string | null = null
 let deselectionGraceTimer: ReturnType<typeof setTimeout> | null = null
@@ -885,7 +1160,6 @@ async function pollSelection() {
     if (currentId !== lastSelectionId) {
       lastSelectionId = currentId
       if (currentId) {
-        // A shape is selected — clear any pending deselection grace timer
         if (deselectionGraceTimer) {
           clearTimeout(deselectionGraceTimer)
           deselectionGraceTimer = null
@@ -893,23 +1167,16 @@ async function pollSelection() {
         const shapes = await client.requestShapes({ ids: [currentId] })
         const path = shapes.find(s => s.type === 'linestring' && s.props.isPath)
         if (path) {
-          // Only call refreshSelection if it's a DIFFERENT path than the one we're
-          // already working with — avoids state reset when re-selecting same path
           if (path.id !== selectedPathId) {
             await refreshSelection()
           }
         } else if (selectedPathId) {
-          // Selected something that's not a path — keep showing current path panel
-          // (don't hide panel, user might be clicking on a participant shape)
+          // Selected something that's not a path — keep current panel
         }
       } else {
-        // Nothing selected — but don't react immediately.
-        // Clicking in the extension iframe can cause transient deselection.
-        // Wait 600ms before treating it as a real deselection.
         if (!deselectionGraceTimer && selectedPathId) {
           deselectionGraceTimer = setTimeout(() => {
             deselectionGraceTimer = null
-            // Re-check: if still no selection after grace period, it's real
             if (lastSelectionId === null) {
               saveCurrentPathState()
               selectedPathId = null
@@ -925,21 +1192,23 @@ async function pollSelection() {
   }
 }
 
-// --- Init ---
+
+// =============================================================================
+// INIT
+// =============================================================================
 
 async function main() {
   client = new ExtensionClient('path-footprint-lab')
   const init = await client.waitForInit()
   console.log('Path Footprint Lab connected:', init.grantedCapabilities)
 
-  // Start with no-path state
   showPanel(false)
 
   renderTemplateGrid()
   renderFootprintList()
   initFormatButtons()
+  updateSimPreview()
 
-  // Poll for selection changes every 500ms
   setInterval(pollSelection, 500)
 }
 
