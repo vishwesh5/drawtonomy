@@ -942,9 +942,10 @@ async function exportScene() {
 // =============================================================================
 // VIDEO GENERATION ENGINE
 // =============================================================================
-// Renders path + moving vehicle on a <canvas>, uses MediaRecorder for WebM.
-// Variable frame timing: each frame is held on canvas for its real-time
-// duration / playback_speed, so MediaRecorder naturally captures correct timing.
+// Host-based scene capture: for each frame, places a single vehicle on the path,
+// captures the full host-rendered scene (all lanes, objects, styles) as PNG via
+// the ext:export-request protocol, draws it to a <canvas>, and uses MediaRecorder
+// for WebM output. Variable frame timing preserved via per-frame hold durations.
 // =============================================================================
 
 interface FrameSpec {
@@ -952,22 +953,14 @@ interface FrameSpec {
   tValue: number            // position on path [0, 1]
   realTimeSec: number       // absolute real-world timestamp
   displayDurationSec: number // how long to hold this frame in video
-  segmentIndex: number      // which speed segment (-1 for manual mode)
-  speedMs: number           // speed during this frame (0 for manual)
 }
 
 interface VideoSettings {
   targetDurationSec: number
-  showTrail: boolean
-  showHUD: boolean
-  showDirection: boolean
 }
 
 let videoSettings: VideoSettings = {
   targetDurationSec: 10,
-  showTrail: true,
-  showHUD: true,
-  showDirection: true,
 }
 
 let videoBlob: Blob | null = null
@@ -990,23 +983,14 @@ function computeFrameSpecs(targetDurationSec: number): FrameSpec[] | { error: st
     const { segmentsComputed, totalDurationSec: realDurationSec } = result
     const playbackSpeed = realDurationSec / targetDurationSec
 
-    // Build absolute real-time timestamps per sample
     const realTimestamps: number[] = []
-    const segIndices: number[] = []
-    const speeds: number[] = []
-
     for (let si = 0; si < segmentsComputed.length; si++) {
       const seg = segmentsComputed[si]
       for (let j = 1; j <= seg.numSamples; j++) {
         realTimestamps.push(seg.timeStartSec + j * seg.intervalSec)
-        segIndices.push(si)
-        speeds.push(seg.speedMs)
       }
     }
 
-    // The pipeline may have produced different count than current footprints
-    // (user may have manually added/removed after generation)
-    // Use min of both to stay safe
     const frameCount = Math.min(sorted.length, realTimestamps.length)
     const frames: FrameSpec[] = []
 
@@ -1018,8 +1002,6 @@ function computeFrameSpecs(targetDurationSec: number): FrameSpec[] | { error: st
         tValue: sorted[i].t,
         realTimeSec: realTimestamps[i],
         displayDurationSec: realInterval / playbackSpeed,
-        segmentIndex: segIndices[i],
-        speedMs: speeds[i],
       })
     }
 
@@ -1031,226 +1013,191 @@ function computeFrameSpecs(targetDurationSec: number): FrameSpec[] | { error: st
   return sorted.map((fp, i) => ({
     index: i,
     tValue: fp.t,
-    realTimeSec: (i + 1) * frameDuration * (1), // synthetic
+    realTimeSec: (i + 1) * frameDuration,
     displayDurationSec: frameDuration,
-    segmentIndex: -1,
-    speedMs: 0,
   }))
 }
 
-// --- Canvas rendering ---
 
-interface CanvasTransform {
-  offsetX: number
-  offsetY: number
-  scale: number
-  canvasW: number
-  canvasH: number
-}
+// =============================================================================
+// HOST SCENE CAPTURE
+// =============================================================================
 
-function computeCanvasTransform(points: Point2D[], canvasW: number, canvasH: number, padding: number = 0.12): CanvasTransform {
-  if (points.length === 0) return { offsetX: 0, offsetY: 0, scale: 1, canvasW, canvasH }
+/**
+ * Captures the current host-rendered scene as a PNG data URL.
+ * Uses the ext:export-request postMessage protocol with returnData: true.
+ */
+async function captureHostFrame(): Promise<string> {
+  const requestId = 'frame_' + (++idCounter) + '_' + Date.now().toString(36)
+  return new Promise<string>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      window.removeEventListener('message', handler)
+      reject(new Error('Host frame capture timed out'))
+    }, 10000)
 
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
-  for (const p of points) {
-    if (p.x < minX) minX = p.x
-    if (p.x > maxX) maxX = p.x
-    if (p.y < minY) minY = p.y
-    if (p.y > maxY) maxY = p.y
-  }
-
-  const pathW = maxX - minX || 1
-  const pathH = maxY - minY || 1
-  const padW = canvasW * padding
-  const padH = canvasH * padding
-  const usableW = canvasW - 2 * padW
-  const usableH = canvasH - 2 * padH
-  const scale = Math.min(usableW / pathW, usableH / pathH)
-  const offsetX = padW + (usableW - pathW * scale) / 2 - minX * scale
-  const offsetY = padH + (usableH - pathH * scale) / 2 - minY * scale
-
-  return { offsetX, offsetY, scale, canvasW, canvasH }
-}
-
-function toCanvas(p: Point2D, tf: CanvasTransform): { x: number; y: number } {
-  return { x: p.x * tf.scale + tf.offsetX, y: p.y * tf.scale + tf.offsetY }
-}
-
-function renderFrame(
-  ctx: CanvasRenderingContext2D,
-  frame: FrameSpec,
-  allFrames: FrameSpec[],
-  points: Point2D[],
-  tf: CanvasTransform,
-  settings: VideoSettings,
-  totalFrames: number,
-  totalRealDuration: number,
-  playbackSpeed: number,
-) {
-  const W = tf.canvasW
-  const H = tf.canvasH
-
-  // --- Background ---
-  ctx.fillStyle = '#1a1a2e'
-  ctx.fillRect(0, 0, W, H)
-
-  // --- Grid (subtle) ---
-  ctx.strokeStyle = 'rgba(255,255,255,0.04)'
-  ctx.lineWidth = 1
-  const gridStep = 40
-  for (let x = 0; x < W; x += gridStep) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke() }
-  for (let y = 0; y < H; y += gridStep) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke() }
-
-  // --- Path polyline ---
-  if (points.length >= 2) {
-    ctx.beginPath()
-    const p0 = toCanvas(points[0], tf)
-    ctx.moveTo(p0.x, p0.y)
-    for (let i = 1; i < points.length; i++) {
-      const pi = toCanvas(points[i], tf)
-      ctx.lineTo(pi.x, pi.y)
-    }
-    ctx.strokeStyle = 'rgba(165, 180, 252, 0.5)'
-    ctx.lineWidth = 2.5
-    ctx.lineCap = 'round'
-    ctx.lineJoin = 'round'
-    ctx.stroke()
-
-    // Direction arrows along path
-    if (settings.showDirection) {
-      const arrowInterval = Math.max(1, Math.floor(points.length / 8))
-      for (let i = arrowInterval; i < points.length - 1; i += arrowInterval) {
-        const cp = toCanvas(points[i], tf)
-        const np = toCanvas(points[i + 1], tf)
-        const dx = np.x - cp.x, dy = np.y - cp.y
-        const len = Math.sqrt(dx * dx + dy * dy)
-        if (len < 2) continue
-        const ux = dx / len, uy = dy / len
-        const sz = 5
-        ctx.beginPath()
-        ctx.moveTo(cp.x + ux * sz, cp.y + uy * sz)
-        ctx.lineTo(cp.x - ux * sz * 0.5 - uy * sz * 0.6, cp.y - uy * sz * 0.5 + ux * sz * 0.6)
-        ctx.lineTo(cp.x - ux * sz * 0.5 + uy * sz * 0.6, cp.y - uy * sz * 0.5 - ux * sz * 0.6)
-        ctx.closePath()
-        ctx.fillStyle = 'rgba(165, 180, 252, 0.3)'
-        ctx.fill()
-      }
-    }
-  }
-
-  // --- Trail (previous positions) ---
-  if (settings.showTrail && frame.index > 0) {
-    for (let i = 0; i < frame.index; i++) {
-      const prevFrame = allFrames[i]
-      const ev = evaluatePathAt(points, prevFrame.tValue)
-      const cp = toCanvas(ev.position, tf)
-      const age = (frame.index - i) / Math.max(1, frame.index)
-      const alpha = Math.max(0.08, 0.5 * (1 - age))
-      ctx.beginPath()
-      ctx.arc(cp.x, cp.y, 3, 0, Math.PI * 2)
-      ctx.fillStyle = `rgba(165, 180, 252, ${alpha})`
-      ctx.fill()
-    }
-  }
-
-  // --- Vehicle at current position ---
-  const evResult = evaluatePathAt(points, frame.tValue)
-  const vp = toCanvas(evResult.position, tf)
-  const vehW = selectedTemplate.w * tf.scale * 0.6
-  const vehH = selectedTemplate.h * tf.scale * 0.6
-  const rotRad = (evResult.tangentAngleDeg * Math.PI) / 180
-
-  ctx.save()
-  ctx.translate(vp.x, vp.y)
-  ctx.rotate(rotRad)
-
-  // Vehicle body
-  ctx.fillStyle = '#6366f1'
-  ctx.strokeStyle = '#a5b4fc'
-  ctx.lineWidth = 1.5
-  const hw = vehW / 2, hh = vehH / 2
-  const cornerR = Math.min(hw, hh) * 0.2
-  ctx.beginPath()
-  ctx.roundRect(-hw, -hh, vehW, vehH, cornerR)
-  ctx.fill()
-  ctx.stroke()
-
-  // Windshield indicator (front of vehicle)
-  ctx.fillStyle = 'rgba(255,255,255,0.4)'
-  ctx.fillRect(-hw * 0.6, -hh, vehW * 0.6, vehH * 0.15)
-
-  ctx.restore()
-
-  // --- Glow around vehicle ---
-  const gradient = ctx.createRadialGradient(vp.x, vp.y, 0, vp.x, vp.y, vehH * 1.5)
-  gradient.addColorStop(0, 'rgba(99, 102, 241, 0.15)')
-  gradient.addColorStop(1, 'rgba(99, 102, 241, 0)')
-  ctx.fillStyle = gradient
-  ctx.fillRect(vp.x - vehH * 2, vp.y - vehH * 2, vehH * 4, vehH * 4)
-
-  // --- HUD overlay ---
-  if (settings.showHUD) {
-    ctx.font = '600 11px -apple-system, BlinkMacSystemFont, sans-serif'
-    ctx.textBaseline = 'top'
-
-    // Top-left: frame counter
-    ctx.fillStyle = 'rgba(0,0,0,0.5)'
-    ctx.fillRect(8, 8, 140, 50)
-    ctx.fillStyle = '#e0e7ff'
-    ctx.fillText(`Frame ${frame.index + 1} / ${totalFrames}`, 14, 14)
-
-    ctx.font = '500 10px -apple-system, BlinkMacSystemFont, sans-serif'
-    ctx.fillStyle = '#a5b4fc'
-    const tPct = (frame.tValue * 100).toFixed(1)
-    ctx.fillText(`Path: ${tPct}%`, 14, 30)
-
-    if (frame.speedMs > 0) {
-      ctx.fillText(`Speed: ${formatSpeed(frame.speedMs)}`, 14, 43)
-    }
-
-    // Top-right: time
-    ctx.fillStyle = 'rgba(0,0,0,0.5)'
-    ctx.fillRect(W - 128, 8, 120, 36)
-    ctx.fillStyle = '#e0e7ff'
-    ctx.font = '600 11px -apple-system, BlinkMacSystemFont, sans-serif'
-    ctx.textAlign = 'right'
-    ctx.fillText(`t = ${formatDuration(frame.realTimeSec)}`, W - 14, 14)
-    ctx.font = '500 10px -apple-system, BlinkMacSystemFont, sans-serif'
-    ctx.fillStyle = '#a5b4fc'
-    ctx.fillText(`${playbackSpeed.toFixed(0)}× speed`, W - 14, 30)
-    ctx.textAlign = 'left'
-
-    // Bottom: progress bar
-    const barY = H - 14, barH = 4, barPad = 12
-    const barW = W - barPad * 2
-    ctx.fillStyle = 'rgba(255,255,255,0.1)'
-    ctx.fillRect(barPad, barY, barW, barH)
-    ctx.fillStyle = '#6366f1'
-    ctx.fillRect(barPad, barY, barW * frame.tValue, barH)
-
-    // Segment color bands on progress bar
-    if (segments.length > 1) {
-      const result = runSegmentPipeline(segments)
-      if (!('error' in result)) {
-        let cumDist = 0
-        const totalDist = result.totalDistanceM
-        const segColors = ['#6366f1', '#8b5cf6', '#a78bfa', '#c4b5fd', '#7c3aed']
-        for (let si = 0; si < result.segmentsComputed.length; si++) {
-          const seg = result.segmentsComputed[si]
-          const startFrac = cumDist / totalDist
-          const endFrac = (cumDist + seg.distanceM) / totalDist
-          cumDist += seg.distanceM
-          ctx.fillStyle = segColors[si % segColors.length]
-          ctx.globalAlpha = 0.3
-          ctx.fillRect(barPad + barW * startFrac, barY - 2, barW * (endFrac - startFrac), barH + 4)
-          ctx.globalAlpha = 1
+    function handler(event: MessageEvent) {
+      const data = event.data
+      if (!data || typeof data !== 'object') return
+      if (data.type === 'ext:export-response' && data.payload?.requestId === requestId) {
+        window.removeEventListener('message', handler)
+        clearTimeout(timeout)
+        if (data.payload.data) {
+          resolve(data.payload.data as string)
+        } else {
+          reject(new Error('No data in export response'))
         }
       }
+      if (data.type === 'ext:error' && data.payload?.requestId === requestId) {
+        window.removeEventListener('message', handler)
+        clearTimeout(timeout)
+        reject(new Error(data.payload.message || 'Export error'))
+      }
     }
+
+    window.addEventListener('message', handler)
+    window.parent.postMessage({
+      type: 'ext:export-request',
+      payload: { requestId, format: 'png', returnData: true },
+    }, '*')
+  })
+}
+
+/**
+ * Load a data URL into an HTMLImageElement.
+ */
+function loadImage(dataUrl: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error('Failed to load image'))
+    img.src = dataUrl
+  })
+}
+
+/**
+ * Build a single vehicle/pedestrian shape at the given path evaluation result.
+ */
+function buildFrameShape(ev: PathEvalResult, pathId: string): BaseShape {
+  const shapeType = selectedTemplate.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
+  const attrType = selectedTemplate.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
+  const attrSubtype = selectedTemplate.type === 'pedestrian' ? 'person' : 'car'
+  return {
+    id: nextId('vfr'), type: shapeType,
+    x: ev.position.x, y: ev.position.y, rotation: ev.tangentAngleDeg,
+    zIndex: shapeType === 'pedestrian' ? 3000 : 4000,
+    props: {
+      w: selectedTemplate.w, h: selectedTemplate.h,
+      color: 'black', size: 'm', opacity: 1,
+      attributes: { type: attrType, subtype: attrSubtype },
+      osmId: '', templateId: selectedTemplate.id, parentPathId: pathId,
+    },
   }
 }
 
-// --- Video UI state ---
+/**
+ * Clear all placed participant shapes, place a single shape at the given t-value,
+ * wait for host to render, capture the scene as PNG. Then clean up the temp shape.
+ * Returns the captured data URL.
+ */
+async function captureFrameAtPosition(tValue: number): Promise<string> {
+  if (!selectedPathId || selectedPathPoints.length < 2) throw new Error('No path selected')
+
+  // 1. Clear existing placed shapes
+  await clearPlacedShapes()
+  await new Promise(r => setTimeout(r, 100))
+
+  // 2. Place single shape at this t-value
+  const ev = evaluatePathAt(selectedPathPoints, tValue)
+  const shape = buildFrameShape(ev, selectedPathId)
+  client.addShapes([shape])
+
+  // 3. Wait for host to render the new shape
+  await new Promise(r => setTimeout(r, 350))
+
+  // 4. Capture the full scene from host
+  const dataUrl = await captureHostFrame()
+
+  // 5. Clean up the temp shape
+  client.deleteShapes([shape.id])
+  await new Promise(r => setTimeout(r, 100))
+
+  return dataUrl
+}
+
+
+// =============================================================================
+// PREVIEW (debounced host capture on scrub)
+// =============================================================================
+
+let previewDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let previewBusy = false
+
+function showCaptureSpinner(show: boolean) {
+  const spinner = document.getElementById('vid-capture-spinner')
+  if (spinner) spinner.style.display = show ? 'flex' : 'none'
+}
+
+async function renderPreview(frameIndex?: number) {
+  if (footprints.length === 0 || selectedPathPoints.length < 2) return
+  if (!isPlaced) return // need shapes placed first for meaningful preview
+  if (videoRecording) return // don't interfere with active recording
+
+  const specs = computeFrameSpecs(videoSettings.targetDurationSec)
+  if ('error' in specs || specs.length === 0) return
+
+  const idx = frameIndex ?? Math.min(Math.floor(specs.length / 3), specs.length - 1)
+  const frame = specs[Math.min(idx, specs.length - 1)]
+
+  if (previewBusy) return
+  previewBusy = true
+  showCaptureSpinner(true)
+
+  try {
+    // Capture host scene with single vehicle at frame position
+    const dataUrl = await captureFrameAtPosition(frame.tValue)
+
+    // Draw captured image to preview canvas
+    const canvas = document.getElementById('vid-canvas') as HTMLCanvasElement
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    const img = await loadImage(dataUrl)
+    // Scale to fit canvas while preserving aspect ratio
+    const imgAspect = img.width / img.height
+    const canvasAspect = canvas.width / canvas.height
+    let drawW = canvas.width, drawH = canvas.height, drawX = 0, drawY = 0
+    if (imgAspect > canvasAspect) {
+      drawH = canvas.width / imgAspect
+      drawY = (canvas.height - drawH) / 2
+    } else {
+      drawW = canvas.height * imgAspect
+      drawX = (canvas.width - drawW) / 2
+    }
+    ctx.fillStyle = '#fff'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.drawImage(img, drawX, drawY, drawW, drawH)
+
+    // Restore all footprints after preview capture
+    await fullRePlaceShapes()
+  } catch (e) {
+    console.warn('[FootprintLab] Preview capture error:', e)
+    // Restore footprints even on error
+    try { await fullRePlaceShapes() } catch {}
+  } finally {
+    previewBusy = false
+    showCaptureSpinner(false)
+  }
+}
+
+function debouncedPreview(frameIndex: number) {
+  if (previewDebounceTimer) clearTimeout(previewDebounceTimer)
+  previewDebounceTimer = setTimeout(() => { previewDebounceTimer = null; renderPreview(frameIndex) }, 500)
+}
+
+
+// =============================================================================
+// VIDEO UI STATE
+// =============================================================================
 
 function updateVideoUI() {
   const needsEl = document.getElementById('video-needs-footprints')!
@@ -1269,9 +1216,6 @@ function updateVideoUI() {
 function onVideoSettingsChange() {
   const dur = parseFloat((document.getElementById('vid-duration') as HTMLInputElement).value) || 10
   videoSettings.targetDurationSec = dur
-  videoSettings.showTrail = (document.getElementById('vid-trail') as HTMLInputElement).checked
-  videoSettings.showHUD = (document.getElementById('vid-overlay') as HTMLInputElement).checked
-  videoSettings.showDirection = (document.getElementById('vid-direction') as HTMLInputElement).checked
 
   const specs = computeFrameSpecs(dur)
   const countEl = document.getElementById('vid-frame-count')!
@@ -1294,7 +1238,6 @@ function onVideoSettingsChange() {
       const ps = result.totalDurationSec / dur
       speedEl.textContent = `${ps.toFixed(1)}×`
 
-      // FPS range from variable frame durations
       const durations = specs.map(f => f.displayDurationSec).filter(d => d > 0)
       const minDur = Math.min(...durations)
       const maxDur = Math.max(...durations)
@@ -1308,15 +1251,35 @@ function onVideoSettingsChange() {
     const fps = specs.length > 0 ? (specs.length / dur).toFixed(1) : '—'
     fpsEl.textContent = `${fps} fps (uniform)`
   }
+
+  // Update scrubber range
+  const scrubEl = document.getElementById('vid-scrub') as HTMLInputElement
+  const scrubMaxEl = document.getElementById('vid-scrub-max')!
+  if (scrubEl && scrubMaxEl) {
+    const maxIdx = Math.max(0, specs.length - 1)
+    scrubEl.max = String(maxIdx)
+    if (parseInt(scrubEl.value) > maxIdx) scrubEl.value = String(maxIdx)
+    scrubMaxEl.textContent = String(specs.length)
+  }
 }
 
-// --- Recording ---
+function onScrubChange() {
+  const scrubEl = document.getElementById('vid-scrub') as HTMLInputElement
+  if (!scrubEl) return
+  const idx = parseInt(scrubEl.value) || 0
+  debouncedPreview(idx)
+}
+
+
+// =============================================================================
+// RECORDING — Host-based scene capture per frame
+// =============================================================================
 
 async function recordVideo() {
   if (footprints.length === 0) { setStatus('No participants to animate'); return }
   if (selectedPathPoints.length < 2) { setStatus('Select a path first'); return }
+  if (!selectedPathId) { setStatus('Select a path first'); return }
 
-  // Read latest settings from DOM
   onVideoSettingsChange()
 
   const specs = computeFrameSpecs(videoSettings.targetDurationSec)
@@ -1327,8 +1290,8 @@ async function recordVideo() {
   videoCancelled = false
   videoBlob = null
 
-  // UI state
   const canvas = document.getElementById('vid-canvas') as HTMLCanvasElement
+  const ctx = canvas.getContext('2d')!
   const recordBtn = document.getElementById('vid-record-btn')!
   const cancelBtn = document.getElementById('vid-cancel-btn')!
   const downloadBtn = document.getElementById('vid-download-btn')!
@@ -1337,33 +1300,28 @@ async function recordVideo() {
   const progressText = document.getElementById('vid-progress-text')!
   const progressPct = document.getElementById('vid-progress-pct')!
 
-  canvas.style.display = 'block'
   recordBtn.style.display = 'none'
   cancelBtn.style.display = 'inline-block'
   downloadBtn.style.display = 'none'
   progressWrap.style.display = 'block'
   progressBar.style.width = '0%'
-  progressText.textContent = 'Preparing...'
+  progressText.textContent = 'Preparing…'
   progressPct.textContent = '0%'
-
-  const ctx = canvas.getContext('2d')!
-  const tf = computeCanvasTransform(selectedPathPoints, canvas.width, canvas.height)
-
-  // Compute playback speed for HUD
-  let playbackSpeed = 1
-  const totalRealDuration = specs[specs.length - 1].realTimeSec
-  if (segments.length > 0) {
-    const result = runSegmentPipeline(segments)
-    if (!('error' in result)) {
-      playbackSpeed = result.totalDurationSec / videoSettings.targetDurationSec
-    }
-  }
 
   // Start MediaRecorder on canvas stream
   const stream = canvas.captureStream(0) // 0 = manual frame capture
+
+  let mimeType = 'video/webm;codecs=vp9'
+  if (!MediaRecorder.isTypeSupported(mimeType)) {
+    mimeType = 'video/webm;codecs=vp8'
+    if (!MediaRecorder.isTypeSupported(mimeType)) {
+      mimeType = 'video/webm'
+    }
+  }
+
   const mediaRecorder = new MediaRecorder(stream, {
-    mimeType: 'video/webm;codecs=vp9',
-    videoBitsPerSecond: 2_500_000,
+    mimeType,
+    videoBitsPerSecond: 4_000_000, // higher bitrate for host-rendered PNGs
   })
 
   const chunks: Blob[] = []
@@ -1387,8 +1345,17 @@ async function recordVideo() {
 
   mediaRecorder.start()
 
-  // Render frames with correct timing
+  const pathId = selectedPathId
+
   try {
+    // Refresh path display points
+    const freshShapes = await client.requestShapes({ ids: [pathId] })
+    const freshPath = freshShapes.find(s => s.id === pathId)
+    if (freshPath) {
+      const dp = freshPath.props._displayPoints as Point2D[] | undefined
+      if (dp && dp.length >= 2) selectedPathPoints = dp
+    }
+
     for (let i = 0; i < specs.length; i++) {
       if (videoCancelled) break
 
@@ -1396,19 +1363,62 @@ async function recordVideo() {
       const pct = ((i + 1) / specs.length * 100).toFixed(0)
       progressBar.style.width = `${pct}%`
       progressPct.textContent = `${pct}%`
-      progressText.textContent = `Frame ${i + 1}/${specs.length}`
+      progressText.textContent = `Capturing frame ${i + 1}/${specs.length}…`
 
-      // Render this frame
-      renderFrame(ctx, frame, specs, selectedPathPoints, tf, videoSettings, specs.length, totalRealDuration, playbackSpeed)
+      // 1. Clear all placed footprints from canvas
+      await clearPlacedShapes()
+      if (videoCancelled) break
+      await new Promise(r => setTimeout(r, 80))
 
-      // Capture the frame to the stream
-      const track = stream.getVideoTracks()[0] as any
-      if (track.requestFrame) {
-        track.requestFrame()
+      // 2. Place single vehicle at this frame's position
+      const ev = evaluatePathAt(selectedPathPoints, frame.tValue)
+      const shape = buildFrameShape(ev, pathId)
+      client.addShapes([shape])
+
+      // 3. Wait for host to render the new shape
+      await new Promise(r => setTimeout(r, 350))
+      if (videoCancelled) { client.deleteShapes([shape.id]); break }
+
+      // 4. Capture the full scene from host as PNG
+      let dataUrl: string
+      try {
+        dataUrl = await captureHostFrame()
+      } catch (e) {
+        console.warn(`[FootprintLab] Frame ${i + 1} capture failed:`, e)
+        client.deleteShapes([shape.id])
+        continue
       }
 
-      // Hold for the correct duration (this is what gives variable timing)
-      const holdMs = Math.max(33, frame.displayDurationSec * 1000) // min 33ms (~30fps cap)
+      // 5. Remove temp shape
+      client.deleteShapes([shape.id])
+
+      // 6. Draw captured image to canvas
+      try {
+        const img = await loadImage(dataUrl)
+        const imgAspect = img.width / img.height
+        const canvasAspect = canvas.width / canvas.height
+        let drawW = canvas.width, drawH = canvas.height, drawX = 0, drawY = 0
+        if (imgAspect > canvasAspect) {
+          drawH = canvas.width / imgAspect
+          drawY = (canvas.height - drawH) / 2
+        } else {
+          drawW = canvas.height * imgAspect
+          drawX = (canvas.width - drawW) / 2
+        }
+        ctx.fillStyle = '#fff'
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+        ctx.drawImage(img, drawX, drawY, drawW, drawH)
+      } catch (e) {
+        console.warn(`[FootprintLab] Frame ${i + 1} draw failed:`, e)
+        continue
+      }
+
+      // 7. Capture the canvas frame to the MediaRecorder stream
+      const track = stream.getVideoTracks()[0] as any
+      if (track.requestFrame) track.requestFrame()
+
+      // 8. Hold for the correct duration (variable timing)
+      const holdMs = Math.max(33, frame.displayDurationSec * 1000)
       await new Promise(r => setTimeout(r, holdMs))
     }
 
@@ -1418,6 +1428,9 @@ async function recordVideo() {
     }
   } finally {
     mediaRecorder.stop()
+    // Restore all footprints after recording
+    progressText.textContent = 'Restoring scene…'
+    try { await fullRePlaceShapes() } catch {}
   }
 }
 
@@ -1455,6 +1468,7 @@ function downloadVideo() {
 ;(window as any).addSegment = addSegment
 ;(window as any).generateFromSimulation = generateFromSimulation
 ;(window as any).onVideoSettingsChange = onVideoSettingsChange
+;(window as any).onScrubChange = onScrubChange
 ;(window as any).recordVideo = recordVideo
 ;(window as any).cancelRecording = cancelRecording
 ;(window as any).downloadVideo = downloadVideo

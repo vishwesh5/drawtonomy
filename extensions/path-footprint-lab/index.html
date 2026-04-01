@@ -518,20 +518,26 @@
           <div class="totals-line"><span>Frame rate range</span><span class="totals-value" id="vid-fps-range">—</span></div>
         </div>
 
-        <div style="display:flex; gap:8px; margin-bottom:6px; font-size:9px; color:#6b7280;">
-          <label style="display:flex; align-items:center; gap:3px; cursor:pointer; width:auto;">
-            <input type="checkbox" id="vid-trail" checked style="margin:0;" /> Trail
-          </label>
-          <label style="display:flex; align-items:center; gap:3px; cursor:pointer; width:auto;">
-            <input type="checkbox" id="vid-overlay" checked style="margin:0;" /> HUD
-          </label>
-          <label style="display:flex; align-items:center; gap:3px; cursor:pointer; width:auto;">
-            <input type="checkbox" id="vid-direction" checked style="margin:0;" /> Direction
-          </label>
+        <div style="font-size:8px; color:#9ca3af; margin-bottom:4px;">
+          Captures the full scene as rendered — all lanes, objects, and styles included.
         </div>
 
-        <canvas id="vid-canvas" width="640" height="360"
-          style="width:100%; border-radius:6px; border:1px solid #e4e4e7; background:#1a1a2e; display:none;"></canvas>
+        <!-- Preview canvas -->
+        <div style="position:relative;">
+          <canvas id="vid-canvas" width="640" height="360"
+            style="width:100%; border-radius:6px; border:1px solid #e4e4e7; background:#fff;"></canvas>
+          <div id="vid-capture-spinner" style="display:none; position:absolute; inset:0; background:rgba(255,255,255,0.7); border-radius:6px; display:none; align-items:center; justify-content:center; font-size:9px; color:#6b7280;">
+            Capturing…
+          </div>
+        </div>
+
+        <!-- Frame scrubber -->
+        <div style="display:flex; align-items:center; gap:4px; margin-top:4px;">
+          <span style="font-size:8px; color:#9ca3af; width:10px;">1</span>
+          <input type="range" id="vid-scrub" min="0" max="1" step="1" value="0"
+            oninput="onScrubChange()" style="flex:1;" />
+          <span style="font-size:8px; color:#9ca3af;" id="vid-scrub-max">1</span>
+        </div>
 
         <div id="vid-progress-wrap" style="display:none; margin-top:6px;">
           <div style="display:flex; justify-content:space-between; font-size:9px; color:#6b7280; margin-bottom:2px;">
@@ -548,7 +554,7 @@
           <button class="btn btn-danger" id="vid-cancel-btn" onclick="cancelRecording()" style="display:none;">✕</button>
         </div>
         <button class="btn btn-success" id="vid-download-btn" onclick="downloadVideo()" style="display:none; width:100%; margin-top:4px;">
-          ⬇ Download WebM
+          ⬇ Download Video
         </button>
       </div>
     </div>
