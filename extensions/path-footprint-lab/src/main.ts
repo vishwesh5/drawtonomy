@@ -316,7 +316,7 @@ function runSegmentPipeline(segments: SpeedSegment[], samplesPerSec: number, pat
   const pathCoverage = Math.min(100, (totalDistanceM / pathLength) * 100)
 
   const totalSamples = Math.max(1, Math.ceil(samplesPerSec * totalDurationSec))
-  if (totalSamples > 500) return { error: `Too many samples (${totalSamples}). Reduce rate or duration.` }
+  if (totalSamples > 2000) return { error: `Too many samples (${totalSamples}). Reduce rate or duration. Max 2000.` }
 
   const interval = totalDurationSec / totalSamples
   const localTimestamps: number[] = []
@@ -814,6 +814,9 @@ function updateTotals(config: PathConfig) {
   }
 
   const coverageColor = result.pathCoverage > 99.9 ? '#059669' : result.pathCoverage > 80 ? '#d97706' : '#6b7280'
+  const highSampleWarning = result.totalParticipants > 500
+    ? `<div style="font-size:7px; color:#d97706; margin-top:3px;">⚠ High sample count — video recording may take ~${formatDuration(result.totalParticipants * 0.6)}</div>`
+    : ''
 
   generateBtn.disabled = false
   totalsEl.className = 'sim-totals'
@@ -826,6 +829,7 @@ function updateTotals(config: PathConfig) {
     <div class="totals-line"><span>Duration</span><span class="totals-value">${formatDuration(result.totalDurationSec)}</span></div>
     <div class="totals-line"><span>Distance</span><span class="totals-value">${formatDistance(result.totalDistanceM)} / ${formatDistance(pathLen)}</span></div>
     <div class="totals-line"><span>Sample interval</span><span class="totals-value">${formatDuration(1 / globalSamplingRate)}</span></div>
+    ${highSampleWarning}
   `
 }
 
