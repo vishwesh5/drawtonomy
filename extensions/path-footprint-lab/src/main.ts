@@ -891,53 +891,30 @@ function onSegModeChange() {
 }
 
 // =============================================================================
-// ACTIONS — GLOBAL
+// ACTIONS — APPLY SETTINGS (button-triggered, not oninput)
 // =============================================================================
 
-function onGlobalSamplingRateChange() {
-  const val = parseFloat((document.getElementById('global-sampling-rate') as HTMLInputElement).value) || 1
-  globalSamplingRate = Math.max(0.01, val)
+/**
+ * Reads sampling rate + scale from inputs, re-generates all paths.
+ * Called on "Apply Scene Settings" button click.
+ */
+function applySceneSettings() {
+  // Read sampling rate
+  const rateVal = parseFloat((document.getElementById('global-sampling-rate') as HTMLInputElement).value) || 1
+  globalSamplingRate = Math.max(0.001, rateVal)
 
-  // Re-generate participants for all paths that have segments
-  for (const config of scene) {
-    if (config.segments.length === 0) continue
-    const pathLen = getPathLength(config)
-    if (pathLen <= 0) continue
-    const result = runSegmentPipeline(config.segments, globalSamplingRate, pathLen)
-    if ('error' in result) continue
-    config.participants = result.tValues.map((t, i) => ({
-      t: parseFloat(t.toFixed(4)),
-      localTimeSec: result.localTimestamps[i],
-    }))
-    config.localDurationSec = result.totalDurationSec
-    config.isPlaced = false
-  }
+  // Read scale
+  const scaleVal = parseFloat((document.getElementById('canvas-scale') as HTMLInputElement).value) || 0
+  metersPerCanvasUnit = Math.max(0, scaleVal)
 
-  renderAll()
-}
-
-// =============================================================================
-// ACTIONS — PER-PATH
-// =============================================================================
-
-function onStartOffsetChange() {
-  const config = getActiveConfig()
-  if (!config) return
-  config.startOffsetSec = parseFloat((document.getElementById('path-start-offset') as HTMLInputElement).value) || 0
-  renderGlobalTimeline()
-  updateVideoUI()
-}
-
-function onScaleChange() {
-  metersPerCanvasUnit = Math.max(0, parseFloat((document.getElementById('canvas-scale') as HTMLInputElement).value) || 0)
-  // Update speed unit dropdowns to reflect scale availability
+  // Update speed unit dropdowns
   updateSpeedUnitOptions()
-  // Re-generate all paths with new scale
+
+  // Re-generate all paths
   for (const config of scene) {
     if (config.segments.length === 0) continue
     const pathLen = getPathLength(config)
     if (pathLen <= 0) continue
-    // Check if existing segments use real-world units without scale
     const hasRealWorldUnits = config.segments.some(s => unitRequiresScale(s.speedUnit))
     if (!hasScale() && hasRealWorldUnits) {
       config.participants = []
@@ -953,8 +930,27 @@ function onScaleChange() {
     config.localDurationSec = result.totalDurationSec
     config.isPlaced = false
   }
+
   renderAll()
+  setStatus('Scene settings applied')
 }
+
+/**
+ * Reads start offset from input, updates timeline.
+ * Called on per-path "Apply" button click.
+ */
+function applyPathSettings() {
+  const config = getActiveConfig()
+  if (!config) return
+  config.startOffsetSec = Math.max(0, parseFloat((document.getElementById('path-start-offset') as HTMLInputElement).value) || 0)
+  renderGlobalTimeline()
+  updateVideoUI()
+  setStatus(`Start offset set to ${formatDuration(config.startOffsetSec)}`)
+}
+
+// =============================================================================
+// ACTIONS — PER-PATH
+// =============================================================================
 
 function calibrateFromPath() {
   const config = getActiveConfig()
@@ -1886,10 +1882,10 @@ async function exportScene() {
 ;(window as any).placeActivePathParticipants = placeActivePathParticipants
 ;(window as any).placeAllPaths = placeAllPaths
 ;(window as any).clearActivePath = clearActivePath
-;(window as any).onStartOffsetChange = onStartOffsetChange
-;(window as any).onScaleChange = onScaleChange
+;(window as any).applySceneSettings = applySceneSettings
+;(window as any).applyPathSettings = applyPathSettings
+;(window as any).onStartOffsetChange = applyPathSettings  // alias for backward compat
 ;(window as any).calibrateFromPath = calibrateFromPath
-;(window as any).onGlobalSamplingRateChange = onGlobalSamplingRateChange
 ;(window as any).exportSceneJSON = exportSceneJSON
 ;(window as any).importSceneJSON = importSceneJSON
 ;(window as any).exportScene = exportScene

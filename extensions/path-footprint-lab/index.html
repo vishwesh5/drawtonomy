@@ -107,13 +107,13 @@
     .offset-row label {
       font-size: 9px; font-weight: 500; color: #6b7280; width: 70px; flex-shrink: 0;
     }
-    .offset-row input[type="number"] {
+    .offset-row input.num-input {
       flex: 1; min-width: 0; padding: 3px 5px;
       border: 1px solid #e4e4e7; border-radius: 4px;
       font-size: 10px; font-family: inherit; color: #374151;
       background: #fff; outline: none;
     }
-    .offset-row input[type="number"]:focus { border-color: #a5b4fc; }
+    .offset-row input.num-input:focus { border-color: #a5b4fc; }
     .offset-row .offset-unit { font-size: 9px; color: #6b7280; width: 24px; }
 
     /* ===== Segment cards ===== */
@@ -139,12 +139,12 @@
     .sim-form-title { font-size: 8px; font-weight: 600; color: #a5b4fc; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
     .sim-row { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
     .sim-row label { width: 50px; font-size: 9px; font-weight: 500; color: #6b7280; flex-shrink: 0; }
-    .sim-row input[type="number"] {
+    .sim-row input.num-input {
       flex: 1; min-width: 0; padding: 3px 5px;
       border: 1px solid #e4e4e7; border-radius: 4px;
       font-size: 10px; font-family: inherit; color: #374151; background: #fff; outline: none;
     }
-    .sim-row input[type="number"]:focus { border-color: #a5b4fc; }
+    .sim-row input.num-input:focus { border-color: #a5b4fc; }
     .sim-row select {
       width: 60px; padding: 3px 3px; border: 1px solid #e4e4e7; border-radius: 4px;
       font-size: 9px; font-family: inherit; color: #374151; background: #fff; cursor: pointer; outline: none; flex-shrink: 0;
@@ -279,23 +279,25 @@
     <!-- Global sampling rate -->
     <div class="offset-row" style="margin-bottom: 4px;">
       <label>Sample rate</label>
-      <input type="number" id="global-sampling-rate" value="1" min="0.01" step="0.1" oninput="onGlobalSamplingRateChange()" />
+      <input type="number" id="global-sampling-rate" value="1" min="0.001" step="any" class="num-input" placeholder="1" />
       <span class="offset-unit" style="width:60px; font-size:8px;">samples/s</span>
     </div>
 
     <!-- Canvas scale -->
     <div class="offset-row" style="margin-bottom: 4px;">
       <label>Scale</label>
-      <input type="number" id="canvas-scale" value="" min="0" step="any" placeholder="optional" oninput="onScaleChange()" />
+      <input type="number" id="canvas-scale" value="" min="0" step="any" class="num-input" placeholder="optional" />
       <span class="offset-unit" style="width:60px; font-size:8px;">m/cu</span>
     </div>
     <div id="scale-hint" style="font-size:8px; color:#9ca3af; margin-bottom:4px; line-height:1.3;">
       No scale → speeds in canvas units/s. Set scale to unlock m/s, km/h, mph.
     </div>
 
+    <button class="btn btn-primary" onclick="applySceneSettings()" style="width:100%; margin-bottom:6px;">Apply Scene Settings</button>
+
     <!-- Calibrate helper -->
     <div style="display:flex; gap:3px; margin-bottom:6px;">
-      <input type="number" id="calibrate-length" min="0.1" step="any" placeholder="Known path length (m)" style="flex:1; padding:3px 5px; border:1px solid #e4e4e7; border-radius:4px; font-size:9px; font-family:inherit; color:#374151; background:#fff; outline:none;" />
+      <input type="number" id="calibrate-length" min="0.1" step="any" placeholder="Known path length (m)" class="num-input" style="flex:1; padding:3px 5px; border:1px solid #e4e4e7; border-radius:4px; font-size:9px; font-family:inherit; color:#374151; background:#fff; outline:none;" />
       <button class="btn btn-default btn-small" onclick="calibrateFromPath()" title="Set scale from selected path's known real-world length">Calibrate</button>
     </div>
 
@@ -322,8 +324,9 @@
 
       <div class="offset-row">
         <label>Start offset</label>
-        <input type="number" id="path-start-offset" value="0" min="0" step="0.1" oninput="onStartOffsetChange()" />
+        <input type="number" id="path-start-offset" value="0" min="0" step="any" class="num-input" />
         <span class="offset-unit">sec</span>
+        <button class="btn btn-default btn-small" onclick="applyPathSettings()" style="margin-left:3px;">Apply</button>
       </div>
     </div>
     <div class="separator"></div>
@@ -360,7 +363,7 @@
 
         <div class="sim-row">
           <label>Speed</label>
-          <input type="number" id="seg-speed" value="30" min="0.01" step="any" />
+          <input type="number" id="seg-speed" value="30" min="0.01" step="any" class="num-input" />
           <select id="seg-speed-unit" class="speed-unit-select">
             <option value="cu/s" selected>cu/s</option>
             <option value="km/h" disabled>km/h</option>
@@ -372,7 +375,7 @@
         <!-- Time mode fields -->
         <div class="sim-row" id="seg-time-row">
           <label>Duration</label>
-          <input type="number" id="seg-time" value="10" min="0.01" step="any" />
+          <input type="number" id="seg-time" value="10" min="0.01" step="any" class="num-input" />
           <select id="seg-time-unit">
             <option value="s" selected>sec</option>
             <option value="min">min</option>
@@ -383,7 +386,7 @@
         <!-- Percent mode fields -->
         <div class="sim-row" id="seg-pct-row" style="display:none;">
           <label>Path %</label>
-          <input type="number" id="seg-percent" value="25" min="0.1" max="100" step="any" />
+          <input type="number" id="seg-percent" value="25" min="0.1" max="100" step="any" class="num-input" />
           <span style="font-size:9px; color:#6b7280; width:60px; text-align:center;">%</span>
         </div>
 
@@ -437,7 +440,7 @@
     <div class="section-title">Video Export</div>
     <div class="sim-row">
       <label>Duration</label>
-      <input type="number" id="vid-duration" value="10" min="1" max="120" step="1" oninput="onVideoSettingsChange()" />
+      <input type="number" id="vid-duration" value="10" min="1" max="120" step="1" class="num-input" oninput="onVideoSettingsChange()" />
       <span style="font-size:9px; color:#6b7280; width:48px; text-align:center;">sec</span>
     </div>
     <div class="sim-totals" id="vid-info" style="margin-top:4px; margin-bottom:4px;">
