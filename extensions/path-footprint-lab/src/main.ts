@@ -374,6 +374,9 @@ function updateUIState() {
     updateBanner.style.display = 'none'
     liveIndicator.style.display = 'block'
   }
+
+  // Update video section visibility
+  updateVideoUI()
 }
 
 function switchMode(mode: 'manual' | 'simulation') {
@@ -937,6 +940,549 @@ async function exportScene() {
 
 
 // =============================================================================
+// VIDEO GENERATION ENGINE
+// =============================================================================
+// Host-based scene capture: for each frame, places a single vehicle on the path,
+// captures the full host-rendered scene (all lanes, objects, styles) as PNG via
+// the ext:export-request protocol, draws it to a <canvas>, and uses MediaRecorder
+// for WebM output. Variable frame timing preserved via per-frame hold durations.
+// =============================================================================
+
+interface FrameSpec {
+  index: number
+  tValue: number            // position on path [0, 1]
+  realTimeSec: number       // absolute real-world timestamp
+  displayDurationSec: number // how long to hold this frame in video
+}
+
+interface VideoSettings {
+  targetDurationSec: number
+}
+
+let videoSettings: VideoSettings = {
+  targetDurationSec: 10,
+}
+
+let videoBlob: Blob | null = null
+let videoRecording = false
+let videoCancelled = false
+
+// --- Frame spec computation ---
+
+function computeFrameSpecs(targetDurationSec: number): FrameSpec[] | { error: string } {
+  if (footprints.length === 0) return { error: 'No participants to animate' }
+  if (targetDurationSec <= 0) return { error: 'Duration must be positive' }
+
+  const sorted = [...footprints].map((f, i) => ({ t: f.t, origIdx: i })).sort((a, b) => a.t - b.t)
+
+  // If segments exist, use real timing from segment pipeline
+  if (segments.length > 0) {
+    const result = runSegmentPipeline(segments)
+    if ('error' in result) return result
+
+    const { segmentsComputed, totalDurationSec: realDurationSec } = result
+    const playbackSpeed = realDurationSec / targetDurationSec
+
+    const realTimestamps: number[] = []
+    for (let si = 0; si < segmentsComputed.length; si++) {
+      const seg = segmentsComputed[si]
+      for (let j = 1; j <= seg.numSamples; j++) {
+        realTimestamps.push(seg.timeStartSec + j * seg.intervalSec)
+      }
+    }
+
+    const frameCount = Math.min(sorted.length, realTimestamps.length)
+    const frames: FrameSpec[] = []
+
+    for (let i = 0; i < frameCount; i++) {
+      const prevTime = i === 0 ? 0 : realTimestamps[i - 1]
+      const realInterval = realTimestamps[i] - prevTime
+      frames.push({
+        index: i,
+        tValue: sorted[i].t,
+        realTimeSec: realTimestamps[i],
+        displayDurationSec: realInterval / playbackSpeed,
+      })
+    }
+
+    return frames
+  }
+
+  // Manual mode: equal timing
+  const frameDuration = targetDurationSec / sorted.length
+  return sorted.map((fp, i) => ({
+    index: i,
+    tValue: fp.t,
+    realTimeSec: (i + 1) * frameDuration,
+    displayDurationSec: frameDuration,
+  }))
+}
+
+
+// =============================================================================
+// HOST SCENE CAPTURE
+// =============================================================================
+
+/**
+ * Captures the current host-rendered scene as a PNG data URL.
+ * Uses the ext:export-request postMessage protocol with returnData: true.
+ */
+async function captureHostFrame(): Promise<string> {
+  const requestId = 'frame_' + (++idCounter) + '_' + Date.now().toString(36)
+  return new Promise<string>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      window.removeEventListener('message', handler)
+      reject(new Error('Host frame capture timed out'))
+    }, 10000)
+
+    function handler(event: MessageEvent) {
+      const data = event.data
+      if (!data || typeof data !== 'object') return
+      if (data.type === 'ext:export-response' && data.payload?.requestId === requestId) {
+        window.removeEventListener('message', handler)
+        clearTimeout(timeout)
+        if (data.payload.data) {
+          resolve(data.payload.data as string)
+        } else {
+          reject(new Error('No data in export response'))
+        }
+      }
+      if (data.type === 'ext:error' && data.payload?.requestId === requestId) {
+        window.removeEventListener('message', handler)
+        clearTimeout(timeout)
+        reject(new Error(data.payload.message || 'Export error'))
+      }
+    }
+
+    window.addEventListener('message', handler)
+    window.parent.postMessage({
+      type: 'ext:export-request',
+      payload: { requestId, format: 'png', returnData: true },
+    }, '*')
+  })
+}
+
+/**
+ * Load a data URL into an HTMLImageElement.
+ */
+function loadImage(dataUrl: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error('Failed to load image'))
+    img.src = dataUrl
+  })
+}
+
+/**
+ * Build a single vehicle/pedestrian shape at the given path evaluation result.
+ */
+function buildFrameShape(ev: PathEvalResult, pathId: string): BaseShape {
+  const shapeType = selectedTemplate.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
+  const attrType = selectedTemplate.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
+  const attrSubtype = selectedTemplate.type === 'pedestrian' ? 'person' : 'car'
+  return {
+    id: nextId('vfr'), type: shapeType,
+    x: ev.position.x, y: ev.position.y, rotation: ev.tangentAngleDeg,
+    zIndex: shapeType === 'pedestrian' ? 3000 : 4000,
+    props: {
+      w: selectedTemplate.w, h: selectedTemplate.h,
+      color: 'black', size: 'm', opacity: 1,
+      attributes: { type: attrType, subtype: attrSubtype },
+      osmId: '', templateId: selectedTemplate.id, parentPathId: pathId,
+    },
+  }
+}
+
+/**
+ * Clear all placed participant shapes, place a single shape at the given t-value,
+ * wait for host to render, capture the scene as PNG. Then clean up the temp shape.
+ * Returns the captured data URL.
+ */
+async function captureFrameAtPosition(tValue: number): Promise<string> {
+  if (!selectedPathId || selectedPathPoints.length < 2) throw new Error('No path selected')
+
+  // 1. Clear existing placed shapes
+  await clearPlacedShapes()
+  await new Promise(r => setTimeout(r, 100))
+
+  // 1b. Re-fetch path coordinates (guards against canvas pan/zoom since last call)
+  try {
+    const freshShapes = await client.requestShapes({ ids: [selectedPathId] })
+    const freshPath = freshShapes.find(s => s.id === selectedPathId)
+    if (freshPath) {
+      const dp = freshPath.props._displayPoints as Point2D[] | undefined
+      if (dp && dp.length >= 2) selectedPathPoints = dp
+    }
+  } catch (e) {
+    console.warn('[FootprintLab] Preview path refresh failed, using cached:', e)
+  }
+
+  // 2. Place single shape at this t-value
+  const ev = evaluatePathAt(selectedPathPoints, tValue)
+  const shape = buildFrameShape(ev, selectedPathId)
+  client.addShapes([shape])
+
+  // 3. Wait for host to render the new shape
+  await new Promise(r => setTimeout(r, 350))
+
+  // 4. Capture the full scene from host
+  const dataUrl = await captureHostFrame()
+
+  // 5. Clean up the temp shape
+  client.deleteShapes([shape.id])
+  await new Promise(r => setTimeout(r, 100))
+
+  return dataUrl
+}
+
+
+// =============================================================================
+// PREVIEW (debounced host capture on scrub)
+// =============================================================================
+
+let previewDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let previewBusy = false
+
+function showCaptureSpinner(show: boolean) {
+  const spinner = document.getElementById('vid-capture-spinner')
+  if (spinner) spinner.style.display = show ? 'flex' : 'none'
+}
+
+async function renderPreview(frameIndex?: number) {
+  if (footprints.length === 0 || selectedPathPoints.length < 2) return
+  if (!isPlaced) return // need shapes placed first for meaningful preview
+  if (videoRecording) return // don't interfere with active recording
+
+  const specs = computeFrameSpecs(videoSettings.targetDurationSec)
+  if ('error' in specs || specs.length === 0) return
+
+  const idx = frameIndex ?? Math.min(Math.floor(specs.length / 3), specs.length - 1)
+  const frame = specs[Math.min(idx, specs.length - 1)]
+
+  if (previewBusy) return
+  previewBusy = true
+  showCaptureSpinner(true)
+
+  try {
+    // Capture host scene with single vehicle at frame position
+    const dataUrl = await captureFrameAtPosition(frame.tValue)
+
+    // Draw captured image to preview canvas
+    const canvas = document.getElementById('vid-canvas') as HTMLCanvasElement
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    const img = await loadImage(dataUrl)
+    // Scale to fit canvas while preserving aspect ratio
+    const imgAspect = img.width / img.height
+    const canvasAspect = canvas.width / canvas.height
+    let drawW = canvas.width, drawH = canvas.height, drawX = 0, drawY = 0
+    if (imgAspect > canvasAspect) {
+      drawH = canvas.width / imgAspect
+      drawY = (canvas.height - drawH) / 2
+    } else {
+      drawW = canvas.height * imgAspect
+      drawX = (canvas.width - drawW) / 2
+    }
+    ctx.fillStyle = '#fff'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.drawImage(img, drawX, drawY, drawW, drawH)
+
+    // Restore all footprints after preview capture
+    await fullRePlaceShapes()
+  } catch (e) {
+    console.warn('[FootprintLab] Preview capture error:', e)
+    // Restore footprints even on error
+    try { await fullRePlaceShapes() } catch {}
+  } finally {
+    previewBusy = false
+    showCaptureSpinner(false)
+  }
+}
+
+function debouncedPreview(frameIndex: number) {
+  if (previewDebounceTimer) clearTimeout(previewDebounceTimer)
+  previewDebounceTimer = setTimeout(() => { previewDebounceTimer = null; renderPreview(frameIndex) }, 500)
+}
+
+
+// =============================================================================
+// VIDEO UI STATE
+// =============================================================================
+
+function updateVideoUI() {
+  const needsEl = document.getElementById('video-needs-footprints')!
+  const controlsEl = document.getElementById('video-controls')!
+
+  if (footprints.length === 0) {
+    needsEl.style.display = 'block'
+    controlsEl.style.display = 'none'
+  } else {
+    needsEl.style.display = 'none'
+    controlsEl.style.display = 'block'
+    onVideoSettingsChange()
+  }
+}
+
+function onVideoSettingsChange() {
+  const dur = parseFloat((document.getElementById('vid-duration') as HTMLInputElement).value) || 10
+  videoSettings.targetDurationSec = dur
+
+  const specs = computeFrameSpecs(dur)
+  const countEl = document.getElementById('vid-frame-count')!
+  const speedEl = document.getElementById('vid-playback-speed')!
+  const fpsEl = document.getElementById('vid-fps-range')!
+
+  if ('error' in specs) {
+    countEl.textContent = '—'
+    speedEl.textContent = specs.error
+    fpsEl.textContent = '—'
+    return
+  }
+
+  countEl.textContent = `${specs.length}`
+
+  // Compute playback speed
+  if (segments.length > 0) {
+    const result = runSegmentPipeline(segments)
+    if (!('error' in result)) {
+      const ps = result.totalDurationSec / dur
+      speedEl.textContent = `${ps.toFixed(1)}×`
+
+      const durations = specs.map(f => f.displayDurationSec).filter(d => d > 0)
+      const minDur = Math.min(...durations)
+      const maxDur = Math.max(...durations)
+      const maxFps = (1 / minDur).toFixed(1)
+      const minFps = (1 / maxDur).toFixed(1)
+      fpsEl.textContent = minFps === maxFps ? `${maxFps} fps` : `${minFps}–${maxFps} fps`
+    }
+  } else {
+    const ps = dur > 0 ? `${(1).toFixed(1)}×` : '—'
+    speedEl.textContent = ps
+    const fps = specs.length > 0 ? (specs.length / dur).toFixed(1) : '—'
+    fpsEl.textContent = `${fps} fps (uniform)`
+  }
+
+  // Update scrubber range
+  const scrubEl = document.getElementById('vid-scrub') as HTMLInputElement
+  const scrubMaxEl = document.getElementById('vid-scrub-max')!
+  if (scrubEl && scrubMaxEl) {
+    const maxIdx = Math.max(0, specs.length - 1)
+    scrubEl.max = String(maxIdx)
+    if (parseInt(scrubEl.value) > maxIdx) scrubEl.value = String(maxIdx)
+    scrubMaxEl.textContent = String(specs.length)
+  }
+}
+
+function onScrubChange() {
+  const scrubEl = document.getElementById('vid-scrub') as HTMLInputElement
+  if (!scrubEl) return
+  const idx = parseInt(scrubEl.value) || 0
+  debouncedPreview(idx)
+}
+
+
+// =============================================================================
+// RECORDING — Host-based scene capture per frame
+// =============================================================================
+// FIX: Each frame now re-fetches _displayPoints from the host before computing
+// the vehicle position. This makes each frame independently correct ("idempotent
+// frame capture") even if the user pans, zooms, or moves the canvas mid-recording.
+// =============================================================================
+
+async function recordVideo() {
+  if (footprints.length === 0) { setStatus('No participants to animate'); return }
+  if (selectedPathPoints.length < 2) { setStatus('Select a path first'); return }
+  if (!selectedPathId) { setStatus('Select a path first'); return }
+
+  onVideoSettingsChange()
+
+  const specs = computeFrameSpecs(videoSettings.targetDurationSec)
+  if ('error' in specs) { setStatus(`Error: ${specs.error}`); return }
+  if (specs.length === 0) { setStatus('No frames to record'); return }
+
+  videoRecording = true
+  videoCancelled = false
+  videoBlob = null
+
+  const canvas = document.getElementById('vid-canvas') as HTMLCanvasElement
+  const ctx = canvas.getContext('2d')!
+  const recordBtn = document.getElementById('vid-record-btn')!
+  const cancelBtn = document.getElementById('vid-cancel-btn')!
+  const downloadBtn = document.getElementById('vid-download-btn')!
+  const progressWrap = document.getElementById('vid-progress-wrap')!
+  const progressBar = document.getElementById('vid-progress-bar')!
+  const progressText = document.getElementById('vid-progress-text')!
+  const progressPct = document.getElementById('vid-progress-pct')!
+
+  recordBtn.style.display = 'none'
+  cancelBtn.style.display = 'inline-block'
+  downloadBtn.style.display = 'none'
+  progressWrap.style.display = 'block'
+  progressBar.style.width = '0%'
+  progressText.textContent = 'Preparing…'
+  progressPct.textContent = '0%'
+
+  // Start MediaRecorder on canvas stream
+  const stream = canvas.captureStream(0) // 0 = manual frame capture
+
+  let mimeType = 'video/webm;codecs=vp9'
+  if (!MediaRecorder.isTypeSupported(mimeType)) {
+    mimeType = 'video/webm;codecs=vp8'
+    if (!MediaRecorder.isTypeSupported(mimeType)) {
+      mimeType = 'video/webm'
+    }
+  }
+
+  const mediaRecorder = new MediaRecorder(stream, {
+    mimeType,
+    videoBitsPerSecond: 4_000_000, // higher bitrate for host-rendered PNGs
+  })
+
+  const chunks: Blob[] = []
+  mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data) }
+
+  mediaRecorder.onstop = () => {
+    if (!videoCancelled && chunks.length > 0) {
+      videoBlob = new Blob(chunks, { type: 'video/webm' })
+      downloadBtn.style.display = 'block'
+      progressText.textContent = `Done — ${specs.length} frames, ${(videoBlob.size / 1024).toFixed(0)} KB`
+      setStatus('Video recorded successfully')
+      client.notify('Video recording complete', 'success')
+    } else {
+      progressText.textContent = 'Cancelled'
+    }
+    videoRecording = false
+    cancelBtn.style.display = 'none'
+    recordBtn.style.display = 'block'
+    recordBtn.style.flex = '1'
+  }
+
+  mediaRecorder.start()
+
+  const pathId = selectedPathId
+
+  try {
+    // Initial path fetch (seed value; each frame will re-fetch below)
+    const freshShapes = await client.requestShapes({ ids: [pathId] })
+    const freshPath = freshShapes.find(s => s.id === pathId)
+    if (freshPath) {
+      const dp = freshPath.props._displayPoints as Point2D[] | undefined
+      if (dp && dp.length >= 2) selectedPathPoints = dp
+    }
+
+    for (let i = 0; i < specs.length; i++) {
+      if (videoCancelled) break
+
+      const frame = specs[i]
+      const pct = ((i + 1) / specs.length * 100).toFixed(0)
+      progressBar.style.width = `${pct}%`
+      progressPct.textContent = `${pct}%`
+      progressText.textContent = `Capturing frame ${i + 1}/${specs.length}…`
+
+      // 1. Clear all placed footprints from canvas
+      await clearPlacedShapes()
+      if (videoCancelled) break
+      await new Promise(r => setTimeout(r, 80))
+
+      // 1b. Re-fetch path coordinates (guards against canvas pan/zoom mid-recording)
+      //     Each frame is independently correct regardless of prior state.
+      try {
+        const framePathShapes = await client.requestShapes({ ids: [pathId] })
+        const framePath = framePathShapes.find(s => s.id === pathId)
+        if (framePath) {
+          const dp = framePath.props._displayPoints as Point2D[] | undefined
+          if (dp && dp.length >= 2) selectedPathPoints = dp
+        }
+      } catch (e) {
+        console.warn(`[FootprintLab] Frame ${i + 1} path refresh failed, using cached:`, e)
+      }
+      if (videoCancelled) break
+
+      // 2. Place single vehicle at this frame's position
+      const ev = evaluatePathAt(selectedPathPoints, frame.tValue)
+      const shape = buildFrameShape(ev, pathId)
+      client.addShapes([shape])
+
+      // 3. Wait for host to render the new shape
+      await new Promise(r => setTimeout(r, 350))
+      if (videoCancelled) { client.deleteShapes([shape.id]); break }
+
+      // 4. Capture the full scene from host as PNG
+      let dataUrl: string
+      try {
+        dataUrl = await captureHostFrame()
+      } catch (e) {
+        console.warn(`[FootprintLab] Frame ${i + 1} capture failed:`, e)
+        client.deleteShapes([shape.id])
+        continue
+      }
+
+      // 5. Remove temp shape
+      client.deleteShapes([shape.id])
+
+      // 6. Draw captured image to canvas
+      try {
+        const img = await loadImage(dataUrl)
+        const imgAspect = img.width / img.height
+        const canvasAspect = canvas.width / canvas.height
+        let drawW = canvas.width, drawH = canvas.height, drawX = 0, drawY = 0
+        if (imgAspect > canvasAspect) {
+          drawH = canvas.width / imgAspect
+          drawY = (canvas.height - drawH) / 2
+        } else {
+          drawW = canvas.height * imgAspect
+          drawX = (canvas.width - drawW) / 2
+        }
+        ctx.fillStyle = '#fff'
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+        ctx.drawImage(img, drawX, drawY, drawW, drawH)
+      } catch (e) {
+        console.warn(`[FootprintLab] Frame ${i + 1} draw failed:`, e)
+        continue
+      }
+
+      // 7. Capture the canvas frame to the MediaRecorder stream
+      const track = stream.getVideoTracks()[0] as any
+      if (track.requestFrame) track.requestFrame()
+
+      // 8. Hold for the correct duration (variable timing)
+      const holdMs = Math.max(33, frame.displayDurationSec * 1000)
+      await new Promise(r => setTimeout(r, holdMs))
+    }
+
+    // Hold last frame briefly
+    if (!videoCancelled) {
+      await new Promise(r => setTimeout(r, 500))
+    }
+  } finally {
+    mediaRecorder.stop()
+    // Restore all footprints after recording
+    progressText.textContent = 'Restoring scene…'
+    try { await fullRePlaceShapes() } catch {}
+  }
+}
+
+function cancelRecording() {
+  videoCancelled = true
+}
+
+function downloadVideo() {
+  if (!videoBlob) return
+  const url = URL.createObjectURL(videoBlob)
+  const a = document.createElement('a')
+  a.href = url
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+  a.download = `path-animation-${timestamp}.webm`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+
+// =============================================================================
 // EXPOSE TO WINDOW
 // =============================================================================
 
@@ -951,6 +1497,11 @@ async function exportScene() {
 ;(window as any).switchMode = switchMode
 ;(window as any).addSegment = addSegment
 ;(window as any).generateFromSimulation = generateFromSimulation
+;(window as any).onVideoSettingsChange = onVideoSettingsChange
+;(window as any).onScrubChange = onScrubChange
+;(window as any).recordVideo = recordVideo
+;(window as any).cancelRecording = cancelRecording
+;(window as any).downloadVideo = downloadVideo
 
 Object.defineProperty(window, 'selectedPathPoints', { get: () => selectedPathPoints })
 Object.defineProperty(window, 'selectedPathId', { get: () => selectedPathId })
