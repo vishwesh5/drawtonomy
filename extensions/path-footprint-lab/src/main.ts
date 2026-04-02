@@ -143,15 +143,12 @@ function evaluatePathAt(points: Point2D[], t: number): PathEvalResult {
 
 type SpeedUnit = 'km/h' | 'm/s' | 'mph'
 type TimeUnit = 's' | 'min' | 'hr'
-type SamplingRateUnit = 'total' | '/s' | '/min' | '/hr'
 
 interface SpeedSegment {
   speed: number
   speedUnit: SpeedUnit
   duration: number
   durationUnit: TimeUnit
-  samplingRate: number
-  samplingRateUnit: SamplingRateUnit
 }
 
 function speedToMs(value: number, unit: SpeedUnit): number {
@@ -167,15 +164,6 @@ function timeToSeconds(value: number, unit: TimeUnit): number {
     case 's':   return value
     case 'min': return value * 60
     case 'hr':  return value * 3600
-  }
-}
-
-function resolveCount(rate: number, rateUnit: SamplingRateUnit, durationSec: number): number {
-  switch (rateUnit) {
-    case 'total': return Math.max(1, Math.round(rate))
-    case '/s':    return Math.max(1, Math.round(rate * durationSec))
-    case '/min':  return Math.max(1, Math.round(rate * (durationSec / 60)))
-    case '/hr':   return Math.max(1, Math.round(rate * (durationSec / 3600)))
   }
 }
 
@@ -199,8 +187,8 @@ function formatSpeed(speedMs: number): string {
 }
 
 interface SegmentComputed {
-  speedMs: number; durationSec: number; numSamples: number
-  distanceM: number; intervalSec: number; timeStartSec: number
+  speedMs: number; durationSec: number
+  distanceM: number; timeStartSec: number
 }
 
 interface SimulationResult {
@@ -212,48 +200,70 @@ interface SimulationResult {
   segmentsComputed: SegmentComputed[]
 }
 
-function runSegmentPipeline(segments: SpeedSegment[]): SimulationResult | { error: string } {
+/**
+ * Piecewise speed profile → uniformly sampled positions.
+ *
+ * Segments define only speed × duration (the velocity profile).
+ * Sampling is global: `samplesPerSec` is applied uniformly across the
+ * total duration, so every path animates at the same temporal cadence.
+ *
+ * Pipeline:
+ *   1. Resolve each segment's speed (m/s), duration (s), distance (m)
+ *   2. totalSamples = ceil(samplesPerSec × totalDuration)
+ *   3. Generate uniform timestamps: t_i = (i+1) × interval, i ∈ [0, N)
+ *   4. For each timestamp, walk the piecewise profile to compute cumulative
+ *      distance, then normalize by totalDistance → path t-value [0, 1]
+ */
+function runSegmentPipeline(segments: SpeedSegment[], samplesPerSec: number): SimulationResult | { error: string } {
   if (segments.length === 0) return { error: 'Add at least one segment' }
+  if (samplesPerSec <= 0) return { error: 'Sampling rate must be positive' }
 
   const computed: SegmentComputed[] = []
   let cumulativeTime = 0
-  let totalParticipants = 0
 
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i]
     const speedMs = speedToMs(seg.speed, seg.speedUnit)
     const durationSec = timeToSeconds(seg.duration, seg.durationUnit)
-    const numSamples = resolveCount(seg.samplingRate, seg.samplingRateUnit, durationSec)
     if (speedMs <= 0) return { error: `Segment ${i + 1}: speed must be positive` }
     if (durationSec <= 0) return { error: `Segment ${i + 1}: duration must be positive` }
     const distanceM = speedMs * durationSec
-    const intervalSec = durationSec / numSamples
-    computed.push({ speedMs, durationSec, numSamples, distanceM, intervalSec, timeStartSec: cumulativeTime })
+    computed.push({ speedMs, durationSec, distanceM, timeStartSec: cumulativeTime })
     cumulativeTime += durationSec
-    totalParticipants += numSamples
   }
 
-  if (totalParticipants > 200) return { error: `Too many participants (${totalParticipants}). Max 200.` }
   const totalDurationSec = cumulativeTime
   const totalDistanceM = computed.reduce((sum, c) => sum + c.distanceM, 0)
   if (totalDistanceM <= 0) return { error: 'Total distance is zero' }
 
-  const allDistances: number[] = []
-  const localTimestamps: number[] = []
-  let priorDistance = 0
+  const totalSamples = Math.max(1, Math.ceil(samplesPerSec * totalDurationSec))
+  if (totalSamples > 500) return { error: `Too many samples (${totalSamples}). Reduce rate or duration.` }
 
-  for (const seg of computed) {
-    for (let j = 1; j <= seg.numSamples; j++) {
-      const dt = j * seg.intervalSec
-      allDistances.push(priorDistance + seg.speedMs * dt)
-      localTimestamps.push(seg.timeStartSec + dt)
+  const interval = totalDurationSec / totalSamples
+  const localTimestamps: number[] = []
+  const allDistances: number[] = []
+
+  for (let i = 0; i < totalSamples; i++) {
+    const timestamp = (i + 1) * interval
+    localTimestamps.push(timestamp)
+
+    // Walk piecewise segments to compute cumulative distance at this timestamp
+    let cumulDist = 0
+    let timeRemaining = timestamp
+
+    for (const seg of computed) {
+      if (timeRemaining <= 0) break
+      const dtInSeg = Math.min(timeRemaining, seg.durationSec)
+      cumulDist += seg.speedMs * dtInSeg
+      timeRemaining -= seg.durationSec
     }
-    priorDistance += seg.distanceM
+
+    allDistances.push(cumulDist)
   }
 
   const tValues = allDistances.map(d => Math.min(1, d / totalDistanceM))
 
-  return { tValues, localTimestamps, totalParticipants, totalDurationSec, totalDistanceM, segmentsComputed: computed }
+  return { tValues, localTimestamps, totalParticipants: totalSamples, totalDurationSec, totalDistanceM, segmentsComputed: computed }
 }
 
 
@@ -304,6 +314,7 @@ interface GlobalTimeline {
 let scene: PathConfig[] = []
 let activePathId: string | null = null
 let colorIndex = 0
+let globalSamplingRate = 1.0 // samples per second — applies uniformly to all paths
 
 function nextColor(): string {
   const c = PATH_COLORS[colorIndex % PATH_COLORS.length]
@@ -470,6 +481,10 @@ function getActiveConfig(): PathConfig | undefined {
 // =============================================================================
 
 function renderAll() {
+  // Sync global sampling rate input if present
+  const rateInput = document.getElementById('global-sampling-rate') as HTMLInputElement | null
+  if (rateInput) rateInput.value = String(globalSamplingRate)
+
   renderPathTabs()
   renderPathConfig()
   renderGlobalTimeline()
@@ -624,7 +639,6 @@ function renderSegmentList(config: PathConfig) {
   config.segments.forEach((seg, i) => {
     const speedMs = speedToMs(seg.speed, seg.speedUnit)
     const durSec = timeToSeconds(seg.duration, seg.durationUnit)
-    const count = resolveCount(seg.samplingRate, seg.samplingRateUnit, durSec)
     const dist = speedMs * durSec
 
     const card = document.createElement('div')
@@ -633,7 +647,7 @@ function renderSegmentList(config: PathConfig) {
       <span class="seg-num">${i + 1}</span>
       <div class="seg-info">
         <div class="seg-main">${seg.speed} ${seg.speedUnit} × ${seg.duration} ${seg.durationUnit}</div>
-        <div class="seg-detail">${count} pts · ${formatDistance(dist)} · ${formatDuration(durSec / count)} interval</div>
+        <div class="seg-detail">${formatDistance(dist)} · ${formatDuration(durSec)}</div>
       </div>
       <button class="seg-remove" data-index="${i}">&times;</button>
     `
@@ -657,7 +671,7 @@ function updateTotals(config: PathConfig) {
     return
   }
 
-  const result = runSegmentPipeline(config.segments)
+  const result = runSegmentPipeline(config.segments, globalSamplingRate)
   if ('error' in result) {
     totalsEl.className = 'sim-totals empty'
     totalsEl.innerHTML = `<div style="text-align:center;color:#991b1b;">${result.error}</div>`
@@ -671,7 +685,7 @@ function updateTotals(config: PathConfig) {
     <div class="totals-line"><span>Participants</span><span class="totals-value">${result.totalParticipants}</span></div>
     <div class="totals-line"><span>Duration</span><span class="totals-value">${formatDuration(result.totalDurationSec)}</span></div>
     <div class="totals-line"><span>Distance</span><span class="totals-value">${formatDistance(result.totalDistanceM)}</span></div>
-    <div class="totals-line"><span>Segments</span><span class="totals-value">${config.segments.length}</span></div>
+    <div class="totals-line"><span>Sample interval</span><span class="totals-value">${formatDuration(1 / globalSamplingRate)}</span></div>
   `
 }
 
@@ -705,6 +719,30 @@ function renderFootprintList(config: PathConfig) {
 
 
 // =============================================================================
+// ACTIONS — GLOBAL
+// =============================================================================
+
+function onGlobalSamplingRateChange() {
+  const val = parseFloat((document.getElementById('global-sampling-rate') as HTMLInputElement).value) || 1
+  globalSamplingRate = Math.max(0.01, val)
+
+  // Re-generate participants for all paths that have segments
+  for (const config of scene) {
+    if (config.segments.length === 0) continue
+    const result = runSegmentPipeline(config.segments, globalSamplingRate)
+    if ('error' in result) continue
+    config.participants = result.tValues.map((t, i) => ({
+      t: parseFloat(t.toFixed(4)),
+      localTimeSec: result.localTimestamps[i],
+    }))
+    config.localDurationSec = result.totalDurationSec
+    config.isPlaced = false
+  }
+
+  renderAll()
+}
+
+// =============================================================================
 // ACTIONS — PER-PATH
 // =============================================================================
 
@@ -724,15 +762,13 @@ function addSegment() {
   const speedUnit = (document.getElementById('seg-speed-unit') as HTMLSelectElement).value as SpeedUnit
   const duration = parseFloat((document.getElementById('seg-time') as HTMLInputElement).value) || 0
   const durationUnit = (document.getElementById('seg-time-unit') as HTMLSelectElement).value as TimeUnit
-  const samplingRate = parseFloat((document.getElementById('seg-rate') as HTMLInputElement).value) || 0
-  const samplingRateUnit = (document.getElementById('seg-rate-unit') as HTMLSelectElement).value as SamplingRateUnit
 
-  if (speed <= 0 || duration <= 0 || samplingRate <= 0) {
-    setStatus('All segment values must be positive')
+  if (speed <= 0 || duration <= 0) {
+    setStatus('Speed and duration must be positive')
     return
   }
 
-  config.segments.push({ speed, speedUnit, duration, durationUnit, samplingRate, samplingRateUnit })
+  config.segments.push({ speed, speedUnit, duration, durationUnit })
   renderSegmentList(config)
   updateTotals(config)
 }
@@ -741,7 +777,7 @@ function generateParticipants() {
   const config = getActiveConfig()
   if (!config) return
 
-  const result = runSegmentPipeline(config.segments)
+  const result = runSegmentPipeline(config.segments, globalSamplingRate)
   if ('error' in result) { setStatus(`Error: ${result.error}`); return }
 
   config.participants = result.tValues.map((t, i) => ({
@@ -1064,6 +1100,7 @@ async function pollSelection() {
 
 interface SceneJSON {
   version: 1
+  globalSamplingRate: number
   paths: Array<{
     pathId: string
     label: string
@@ -1076,6 +1113,7 @@ interface SceneJSON {
 function exportSceneJSON() {
   const data: SceneJSON = {
     version: 1,
+    globalSamplingRate,
     paths: scene.map(pc => ({
       pathId: pc.pathId,
       label: pc.label,
@@ -1105,6 +1143,11 @@ async function importSceneJSON(input: HTMLInputElement) {
 
     if (!data.version || !Array.isArray(data.paths)) {
       setStatus('Invalid scene JSON'); return
+    }
+
+    // Restore global sampling rate if present
+    if (typeof data.globalSamplingRate === 'number' && data.globalSamplingRate > 0) {
+      globalSamplingRate = data.globalSamplingRate
     }
 
     let imported = 0, skipped = 0
@@ -1138,7 +1181,7 @@ async function importSceneJSON(input: HTMLInputElement) {
 
         // Auto-generate participants if segments exist
         if (config.segments.length > 0) {
-          const result = runSegmentPipeline(config.segments)
+          const result = runSegmentPipeline(config.segments, globalSamplingRate)
           if (!('error' in result)) {
             config.participants = result.tValues.map((t, i) => ({
               t: parseFloat(t.toFixed(4)),
@@ -1560,6 +1603,7 @@ async function exportScene() {
 ;(window as any).placeAllPaths = placeAllPaths
 ;(window as any).clearActivePath = clearActivePath
 ;(window as any).onStartOffsetChange = onStartOffsetChange
+;(window as any).onGlobalSamplingRateChange = onGlobalSamplingRateChange
 ;(window as any).exportSceneJSON = exportSceneJSON
 ;(window as any).importSceneJSON = importSceneJSON
 ;(window as any).exportScene = exportScene
@@ -1570,6 +1614,7 @@ async function exportScene() {
 
 Object.defineProperty(window, 'scene', { get: () => scene })
 Object.defineProperty(window, 'activePathId', { get: () => activePathId })
+Object.defineProperty(window, 'globalSamplingRate', { get: () => globalSamplingRate, set: (v: number) => { globalSamplingRate = v } })
 
 
 // =============================================================================
