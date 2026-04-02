@@ -146,7 +146,7 @@ function evaluatePathAt(points: Point2D[], t: number): PathEvalResult {
 // SIMULATION ENGINE — Segment-based piecewise speed profiles
 // =============================================================================
 
-type SpeedUnit = 'km/h' | 'm/s' | 'mph'
+type SpeedUnit = 'cu/s' | 'km/h' | 'm/s' | 'mph'
 type TimeUnit = 's' | 'min' | 'hr'
 
 type SegmentMode = 'time' | 'percent'
@@ -162,12 +162,24 @@ interface SpeedSegment {
   pathPercent?: number   // 0-100, percentage of path length this segment covers
 }
 
-function speedToMs(value: number, unit: SpeedUnit): number {
+/**
+ * Converts speed to "working units per second".
+ * When scale is set (metersPerCanvasUnit > 0), working unit = meters.
+ * When no scale, working unit = canvas units — only cu/s is valid.
+ * cu/s is always accepted: when scale is set, it's converted to m/s via scale.
+ */
+function speedToWorkingUnits(value: number, unit: SpeedUnit): number {
   switch (unit) {
+    case 'cu/s': return metersPerCanvasUnit > 0 ? value * metersPerCanvasUnit : value
     case 'km/h': return value / 3.6
     case 'm/s':  return value
     case 'mph':  return value * 0.44704
   }
+}
+
+/** Returns true if the unit requires a scale to be set */
+function unitRequiresScale(unit: SpeedUnit): boolean {
+  return unit !== 'cu/s'
 }
 
 function timeToSeconds(value: number, unit: TimeUnit): number {
@@ -185,16 +197,28 @@ function formatDuration(seconds: number): string {
   return `${(seconds / 3600).toFixed(2)} hr`
 }
 
-function formatDistance(meters: number): string {
-  if (meters < 1) return `${(meters * 100).toFixed(1)} cm`
-  if (meters < 1000) return `${meters.toFixed(1)} m`
-  return `${(meters / 1000).toFixed(2)} km`
+/** Format distance in working units — scale-aware */
+function formatDistance(value: number): string {
+  if (metersPerCanvasUnit > 0) {
+    // Real-world units
+    if (value < 1) return `${(value * 100).toFixed(1)} cm`
+    if (value < 1000) return `${value.toFixed(1)} m`
+    return `${(value / 1000).toFixed(2)} km`
+  } else {
+    // Canvas units
+    return `${value.toFixed(1)} cu`
+  }
 }
 
-function formatSpeed(speedMs: number): string {
-  const kmh = speedMs * 3.6
-  if (kmh < 1) return `${speedMs.toFixed(2)} m/s`
-  return `${kmh.toFixed(1)} km/h`
+/** Format speed in working units — scale-aware */
+function formatSpeed(value: number): string {
+  if (metersPerCanvasUnit > 0) {
+    const kmh = value * 3.6
+    if (kmh < 1) return `${value.toFixed(2)} m/s`
+    return `${kmh.toFixed(1)} km/h`
+  } else {
+    return `${value.toFixed(1)} cu/s`
+  }
 }
 
 interface SegmentComputed {
@@ -217,16 +241,20 @@ interface SimulationResult {
 /**
  * Resolves a segment's distance and duration from its mode.
  * Time mode: distance = speed × time
- * Percent mode: distance = (pct/100) × pathLengthM, time = distance / speed
+ * Percent mode: distance = (pct/100) × pathLength, time = distance / speed
+ * All in working units (meters when scale set, canvas units when not).
  */
-function resolveSegment(seg: SpeedSegment, pathLengthM: number): { distanceM: number; durationSec: number; speedMs: number } | { error: string } {
-  const speedMs = speedToMs(seg.speed, seg.speedUnit)
+function resolveSegment(seg: SpeedSegment, pathLength: number): { distanceM: number; durationSec: number; speedMs: number } | { error: string } {
+  if (unitRequiresScale(seg.speedUnit) && metersPerCanvasUnit <= 0) {
+    return { error: `unit "${seg.speedUnit}" requires canvas scale to be set` }
+  }
+  const speedMs = speedToWorkingUnits(seg.speed, seg.speedUnit)
   if (speedMs <= 0) return { error: 'speed must be positive' }
 
   if (seg.mode === 'percent') {
     const pct = seg.pathPercent ?? 0
     if (pct <= 0 || pct > 100) return { error: 'path % must be between 0 and 100' }
-    const distanceM = (pct / 100) * pathLengthM
+    const distanceM = (pct / 100) * pathLength
     const durationSec = distanceM / speedMs
     return { distanceM, durationSec, speedMs }
   } else {
@@ -241,34 +269,34 @@ function resolveSegment(seg: SpeedSegment, pathLengthM: number): { distanceM: nu
  * Piecewise speed profile → uniformly sampled positions.
  *
  * Segments define speed × (time | path%). Sampling is global via samplesPerSec.
- * Distances are normalized by pathLengthM, so t-values represent actual
+ * Distances are normalized by pathLength, so t-values represent actual
  * position on the physical path. Coverage ≤ 100% is enforced.
  *
  * Pipeline:
  *   1. Resolve each segment's speed, duration, distance (handling both modes)
- *   2. Validate cumulative distance ≤ pathLengthM
+ *   2. Validate cumulative distance ≤ pathLength
  *   3. totalSamples = ceil(samplesPerSec × totalDuration)
  *   4. Generate uniform timestamps, walk piecewise profile for cumulative distance
- *   5. Normalize by pathLengthM → path t-value [0, 1]
+ *   5. Normalize by pathLength → path t-value [0, 1]
  */
-function runSegmentPipeline(segments: SpeedSegment[], samplesPerSec: number, pathLengthM: number): SimulationResult | { error: string } {
+function runSegmentPipeline(segments: SpeedSegment[], samplesPerSec: number, pathLength: number): SimulationResult | { error: string } {
   if (segments.length === 0) return { error: 'Add at least one segment' }
   if (samplesPerSec <= 0) return { error: 'Sampling rate must be positive' }
-  if (pathLengthM <= 0) return { error: 'Set the path length first' }
+  if (pathLength <= 0) return { error: 'Path has zero length' }
 
   const computed: SegmentComputed[] = []
   let cumulativeTime = 0
   let cumulativeDistance = 0
 
   for (let i = 0; i < segments.length; i++) {
-    const resolved = resolveSegment(segments[i], pathLengthM)
+    const resolved = resolveSegment(segments[i], pathLength)
     if ('error' in resolved) return { error: `Segment ${i + 1}: ${resolved.error}` }
 
     cumulativeDistance += resolved.distanceM
-    const coveragePct = (cumulativeDistance / pathLengthM) * 100
+    const coveragePct = (cumulativeDistance / pathLength) * 100
 
     if (coveragePct > 100.01) {
-      const excess = cumulativeDistance - pathLengthM
+      const excess = cumulativeDistance - pathLength
       return { error: `Segment ${i + 1} exceeds path by ${formatDistance(excess)} (${coveragePct.toFixed(1)}% > 100%). Remove or shorten this segment.` }
     }
 
@@ -285,7 +313,7 @@ function runSegmentPipeline(segments: SpeedSegment[], samplesPerSec: number, pat
 
   const totalDurationSec = cumulativeTime
   const totalDistanceM = cumulativeDistance
-  const pathCoverage = Math.min(100, (totalDistanceM / pathLengthM) * 100)
+  const pathCoverage = Math.min(100, (totalDistanceM / pathLength) * 100)
 
   const totalSamples = Math.max(1, Math.ceil(samplesPerSec * totalDurationSec))
   if (totalSamples > 500) return { error: `Too many samples (${totalSamples}). Reduce rate or duration.` }
@@ -312,8 +340,8 @@ function runSegmentPipeline(segments: SpeedSegment[], samplesPerSec: number, pat
     allDistances.push(cumulDist)
   }
 
-  // Normalize by pathLengthM — t represents actual position on the physical path
-  const tValues = allDistances.map(d => Math.min(1, d / pathLengthM))
+  // Normalize by pathLength — t represents actual position on the physical path
+  const tValues = allDistances.map(d => Math.min(1, d / pathLength))
 
   return { tValues, localTimestamps, totalParticipants: totalSamples, totalDurationSec, totalDistanceM, pathCoverage, segmentsComputed: computed }
 }
@@ -339,7 +367,6 @@ interface PathConfig {
   label: string
   color: string
   startOffsetSec: number
-  pathLengthM: number            // user-specified real-world path length in meters
   templateId: string
   segments: SpeedSegment[]
   displayPoints: Point2D[]       // cached from host
@@ -368,6 +395,18 @@ let scene: PathConfig[] = []
 let activePathId: string | null = null
 let colorIndex = 0
 let globalSamplingRate = 1.0 // samples per second — applies uniformly to all paths
+let metersPerCanvasUnit = 0   // 0 = no scale (work in canvas units), >0 = real-world mode
+
+function hasScale(): boolean { return metersPerCanvasUnit > 0 }
+
+/**
+ * Returns the path length in working units.
+ * When scale is set: meters. When not: canvas units.
+ */
+function getPathLength(config: PathConfig): number {
+  const arcLen = totalArcLength(config.displayPoints)
+  return hasScale() ? arcLen * metersPerCanvasUnit : arcLen
+}
 
 function nextColor(): string {
   const c = PATH_COLORS[colorIndex % PATH_COLORS.length]
@@ -415,7 +454,6 @@ function addPathToScene(pathId: string, displayPoints: Point2D[], label?: string
     label: label ?? `Path ${scene.length + 1}`,
     color: nextColor(),
     startOffsetSec: 0,
-    pathLengthM: 0,           // user must set this before generating
     templateId: 'sedan',
     segments: [],
     displayPoints,
@@ -535,9 +573,12 @@ function getActiveConfig(): PathConfig | undefined {
 // =============================================================================
 
 function renderAll() {
-  // Sync global sampling rate input if present
+  // Sync global inputs
   const rateInput = document.getElementById('global-sampling-rate') as HTMLInputElement | null
   if (rateInput) rateInput.value = String(globalSamplingRate)
+  const scaleInput = document.getElementById('canvas-scale') as HTMLInputElement | null
+  if (scaleInput) scaleInput.value = metersPerCanvasUnit > 0 ? String(metersPerCanvasUnit) : ''
+  updateSpeedUnitOptions()
 
   renderPathTabs()
   renderPathConfig()
@@ -601,17 +642,18 @@ function renderPathConfig() {
   }
   panel.style.display = 'block'
 
-  // Path info
+  // Path info — show canvas arc and derived real-world length
   const canvasArc = totalArcLength(config.displayPoints)
   const smoothed = config.displayPoints.length > 0 ? ' (smoothed)' : ''
+  const pathLen = getPathLength(config)
+  const lengthInfo = hasScale()
+    ? `${canvasArc.toFixed(0)} cu · ${formatDistance(pathLen)}`
+    : `${canvasArc.toFixed(0)} cu`
   document.getElementById('path-info')!.textContent =
-    `${config.label} — ${config.displayPoints.length} pts${smoothed} · ${canvasArc.toFixed(0)} canvas units`
+    `${config.label} — ${config.displayPoints.length} pts${smoothed} · ${lengthInfo}`
 
   // Start offset
   ;(document.getElementById('path-start-offset') as HTMLInputElement).value = String(config.startOffsetSec)
-
-  // Path length
-  ;(document.getElementById('path-length-m') as HTMLInputElement).value = String(config.pathLengthM || '')
 
   // Template
   renderTemplateGrid(config)
@@ -698,7 +740,7 @@ function renderSegmentList(config: PathConfig) {
   }
 
   let cumulDist = 0
-  const pathLen = config.pathLengthM
+  const pathLen = getPathLength(config)
 
   config.segments.forEach((seg, i) => {
     const resolved = pathLen > 0 ? resolveSegment(seg, pathLen) : null
@@ -755,14 +797,15 @@ function updateTotals(config: PathConfig) {
     return
   }
 
-  if (config.pathLengthM <= 0) {
+  const pathLen = getPathLength(config)
+  if (pathLen <= 0) {
     totalsEl.className = 'sim-totals empty'
-    totalsEl.innerHTML = '<div style="text-align:center;color:#d97706;">Set the path length (m) above before generating</div>'
+    totalsEl.innerHTML = '<div style="text-align:center;color:#d97706;">Path has no geometry — select a path with points</div>'
     generateBtn.disabled = true
     return
   }
 
-  const result = runSegmentPipeline(config.segments, globalSamplingRate, config.pathLengthM)
+  const result = runSegmentPipeline(config.segments, globalSamplingRate, pathLen)
   if ('error' in result) {
     totalsEl.className = 'sim-totals empty'
     totalsEl.innerHTML = `<div style="text-align:center;color:#991b1b;">${result.error}</div>`
@@ -781,7 +824,7 @@ function updateTotals(config: PathConfig) {
     </div>
     <div class="totals-line"><span>Participants</span><span class="totals-value">${result.totalParticipants}</span></div>
     <div class="totals-line"><span>Duration</span><span class="totals-value">${formatDuration(result.totalDurationSec)}</span></div>
-    <div class="totals-line"><span>Distance</span><span class="totals-value">${formatDistance(result.totalDistanceM)} / ${formatDistance(config.pathLengthM)}</span></div>
+    <div class="totals-line"><span>Distance</span><span class="totals-value">${formatDistance(result.totalDistanceM)} / ${formatDistance(pathLen)}</span></div>
     <div class="totals-line"><span>Sample interval</span><span class="totals-value">${formatDuration(1 / globalSamplingRate)}</span></div>
   `
 }
@@ -857,8 +900,10 @@ function onGlobalSamplingRateChange() {
 
   // Re-generate participants for all paths that have segments
   for (const config of scene) {
-    if (config.segments.length === 0 || config.pathLengthM <= 0) continue
-    const result = runSegmentPipeline(config.segments, globalSamplingRate, config.pathLengthM)
+    if (config.segments.length === 0) continue
+    const pathLen = getPathLength(config)
+    if (pathLen <= 0) continue
+    const result = runSegmentPipeline(config.segments, globalSamplingRate, pathLen)
     if ('error' in result) continue
     config.participants = result.tValues.map((t, i) => ({
       t: parseFloat(t.toFixed(4)),
@@ -883,15 +928,71 @@ function onStartOffsetChange() {
   updateVideoUI()
 }
 
-function onPathLengthChange() {
+function onScaleChange() {
+  metersPerCanvasUnit = Math.max(0, parseFloat((document.getElementById('canvas-scale') as HTMLInputElement).value) || 0)
+  // Update speed unit dropdowns to reflect scale availability
+  updateSpeedUnitOptions()
+  // Re-generate all paths with new scale
+  for (const config of scene) {
+    if (config.segments.length === 0) continue
+    const pathLen = getPathLength(config)
+    if (pathLen <= 0) continue
+    // Check if existing segments use real-world units without scale
+    const hasRealWorldUnits = config.segments.some(s => unitRequiresScale(s.speedUnit))
+    if (!hasScale() && hasRealWorldUnits) {
+      config.participants = []
+      config.isPlaced = false
+      continue
+    }
+    const result = runSegmentPipeline(config.segments, globalSamplingRate, pathLen)
+    if ('error' in result) { config.participants = []; config.isPlaced = false; continue }
+    config.participants = result.tValues.map((t, i) => ({
+      t: parseFloat(t.toFixed(4)),
+      localTimeSec: result.localTimestamps[i],
+    }))
+    config.localDurationSec = result.totalDurationSec
+    config.isPlaced = false
+  }
+  renderAll()
+}
+
+function calibrateFromPath() {
   const config = getActiveConfig()
-  if (!config) return
-  config.pathLengthM = Math.max(0, parseFloat((document.getElementById('path-length-m') as HTMLInputElement).value) || 0)
-  // Re-validate and re-render segments with new path length
-  renderSegmentList(config)
-  updateTotals(config)
-  renderGlobalTimeline()
-  updateVideoUI()
+  if (!config || config.displayPoints.length < 2) {
+    setStatus('Select a path first')
+    return
+  }
+  const knownLength = parseFloat((document.getElementById('calibrate-length') as HTMLInputElement).value) || 0
+  if (knownLength <= 0) {
+    setStatus('Enter a positive real-world length for this path')
+    return
+  }
+  const arcLen = totalArcLength(config.displayPoints)
+  if (arcLen <= 0) {
+    setStatus('Path has zero canvas length')
+    return
+  }
+  metersPerCanvasUnit = knownLength / arcLen
+  ;(document.getElementById('canvas-scale') as HTMLInputElement).value = metersPerCanvasUnit.toFixed(6)
+  updateSpeedUnitOptions()
+  renderAll()
+  setStatus(`Scale set: 1 cu = ${metersPerCanvasUnit.toFixed(4)} m (from ${config.label}: ${formatDistance(knownLength)})`)
+  client.notify(`Scale calibrated: 1 canvas unit = ${metersPerCanvasUnit.toFixed(4)} m`, 'success')
+}
+
+/** Enable/disable real-world speed units based on whether scale is set */
+function updateSpeedUnitOptions() {
+  const selects = document.querySelectorAll('.speed-unit-select') as NodeListOf<HTMLSelectElement>
+  selects.forEach(sel => {
+    for (const opt of sel.options) {
+      if (opt.value !== 'cu/s') {
+        opt.disabled = !hasScale()
+        if (!hasScale() && sel.value === opt.value) {
+          sel.value = 'cu/s'
+        }
+      }
+    }
+  })
 }
 
 function addSegment() {
@@ -903,6 +1004,10 @@ function addSegment() {
   const speedUnit = (document.getElementById('seg-speed-unit') as HTMLSelectElement).value as SpeedUnit
 
   if (speed <= 0) { setStatus('Speed must be positive'); return }
+  if (unitRequiresScale(speedUnit) && !hasScale()) {
+    setStatus(`Unit "${speedUnit}" requires canvas scale to be set`)
+    return
+  }
 
   let newSeg: SpeedSegment
 
@@ -918,17 +1023,18 @@ function addSegment() {
   }
 
   // Pre-validate: check if adding this segment would exceed path length
-  if (config.pathLengthM > 0) {
+  const pathLen = getPathLength(config)
+  if (pathLen > 0) {
     const testSegments = [...config.segments, newSeg]
     let totalDist = 0
     for (const seg of testSegments) {
-      const resolved = resolveSegment(seg, config.pathLengthM)
+      const resolved = resolveSegment(seg, pathLen)
       if ('error' in resolved) { setStatus(`Error: ${resolved.error}`); return }
       totalDist += resolved.distanceM
     }
-    if (totalDist > config.pathLengthM * 1.001) {
-      const excess = totalDist - config.pathLengthM
-      const pct = ((totalDist / config.pathLengthM) * 100).toFixed(1)
+    if (totalDist > pathLen * 1.001) {
+      const excess = totalDist - pathLen
+      const pct = ((totalDist / pathLen) * 100).toFixed(1)
       setStatus(`Cannot add: would exceed path by ${formatDistance(excess)} (${pct}%)`)
       return
     }
@@ -943,9 +1049,10 @@ function addSegment() {
 function generateParticipants() {
   const config = getActiveConfig()
   if (!config) return
-  if (config.pathLengthM <= 0) { setStatus('Set the path length (m) first'); return }
+  const pathLen = getPathLength(config)
+  if (pathLen <= 0) { setStatus('Path has no geometry'); return }
 
-  const result = runSegmentPipeline(config.segments, globalSamplingRate, config.pathLengthM)
+  const result = runSegmentPipeline(config.segments, globalSamplingRate, pathLen)
   if ('error' in result) { setStatus(`Error: ${result.error}`); return }
 
   config.participants = result.tValues.map((t, i) => ({
@@ -1269,11 +1376,11 @@ async function pollSelection() {
 interface SceneJSON {
   version: 1
   globalSamplingRate: number
+  metersPerCanvasUnit: number
   paths: Array<{
     pathId: string
     label: string
     startOffsetSec: number
-    pathLengthM: number
     templateId: string
     segments: SpeedSegment[]
   }>
@@ -1283,11 +1390,11 @@ function exportSceneJSON() {
   const data: SceneJSON = {
     version: 1,
     globalSamplingRate,
+    metersPerCanvasUnit,
     paths: scene.map(pc => ({
       pathId: pc.pathId,
       label: pc.label,
       startOffsetSec: pc.startOffsetSec,
-      pathLengthM: pc.pathLengthM,
       templateId: pc.templateId,
       segments: pc.segments.map(s => ({ ...s })),
     })),
@@ -1320,6 +1427,11 @@ async function importSceneJSON(input: HTMLInputElement) {
       globalSamplingRate = data.globalSamplingRate
     }
 
+    // Restore canvas scale if present
+    if (typeof data.metersPerCanvasUnit === 'number' && data.metersPerCanvasUnit > 0) {
+      metersPerCanvasUnit = data.metersPerCanvasUnit
+    }
+
     let imported = 0, skipped = 0
 
     for (const entry of data.paths) {
@@ -1346,13 +1458,13 @@ async function importSceneJSON(input: HTMLInputElement) {
 
         const config = addPathToScene(entry.pathId, points, entry.label)
         config.startOffsetSec = entry.startOffsetSec ?? 0
-        config.pathLengthM = entry.pathLengthM ?? 0
         config.templateId = entry.templateId ?? 'sedan'
         config.segments = (entry.segments ?? []).map(s => ({ ...s }))
 
-        // Auto-generate participants if segments exist and path length is set
-        if (config.segments.length > 0 && config.pathLengthM > 0) {
-          const result = runSegmentPipeline(config.segments, globalSamplingRate, config.pathLengthM)
+        // Auto-generate participants if segments exist
+        const pathLen = getPathLength(config)
+        if (config.segments.length > 0 && pathLen > 0) {
+          const result = runSegmentPipeline(config.segments, globalSamplingRate, pathLen)
           if (!('error' in result)) {
             config.participants = result.tValues.map((t, i) => ({
               t: parseFloat(t.toFixed(4)),
@@ -1775,7 +1887,8 @@ async function exportScene() {
 ;(window as any).placeAllPaths = placeAllPaths
 ;(window as any).clearActivePath = clearActivePath
 ;(window as any).onStartOffsetChange = onStartOffsetChange
-;(window as any).onPathLengthChange = onPathLengthChange
+;(window as any).onScaleChange = onScaleChange
+;(window as any).calibrateFromPath = calibrateFromPath
 ;(window as any).onGlobalSamplingRateChange = onGlobalSamplingRateChange
 ;(window as any).exportSceneJSON = exportSceneJSON
 ;(window as any).importSceneJSON = importSceneJSON
@@ -1788,6 +1901,7 @@ async function exportScene() {
 Object.defineProperty(window, 'scene', { get: () => scene })
 Object.defineProperty(window, 'activePathId', { get: () => activePathId })
 Object.defineProperty(window, 'globalSamplingRate', { get: () => globalSamplingRate, set: (v: number) => { globalSamplingRate = v } })
+Object.defineProperty(window, 'metersPerCanvasUnit', { get: () => metersPerCanvasUnit, set: (v: number) => { metersPerCanvasUnit = v } })
 
 
 // =============================================================================

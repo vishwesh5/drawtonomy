@@ -277,10 +277,26 @@
     <div class="section-title">Scene Paths</div>
 
     <!-- Global sampling rate -->
-    <div class="offset-row" style="margin-bottom: 6px;">
+    <div class="offset-row" style="margin-bottom: 4px;">
       <label>Sample rate</label>
       <input type="number" id="global-sampling-rate" value="1" min="0.01" step="0.1" oninput="onGlobalSamplingRateChange()" />
       <span class="offset-unit" style="width:60px; font-size:8px;">samples/s</span>
+    </div>
+
+    <!-- Canvas scale -->
+    <div class="offset-row" style="margin-bottom: 4px;">
+      <label>Scale</label>
+      <input type="number" id="canvas-scale" value="" min="0" step="any" placeholder="optional" oninput="onScaleChange()" />
+      <span class="offset-unit" style="width:60px; font-size:8px;">m/cu</span>
+    </div>
+    <div id="scale-hint" style="font-size:8px; color:#9ca3af; margin-bottom:4px; line-height:1.3;">
+      No scale → speeds in canvas units/s. Set scale to unlock m/s, km/h, mph.
+    </div>
+
+    <!-- Calibrate helper -->
+    <div style="display:flex; gap:3px; margin-bottom:6px;">
+      <input type="number" id="calibrate-length" min="0.1" step="any" placeholder="Known path length (m)" style="flex:1; padding:3px 5px; border:1px solid #e4e4e7; border-radius:4px; font-size:9px; font-family:inherit; color:#374151; background:#fff; outline:none;" />
+      <button class="btn btn-default btn-small" onclick="calibrateFromPath()" title="Set scale from selected path's known real-world length">Calibrate</button>
     </div>
 
     <div class="path-tabs" id="path-tabs"></div>
@@ -303,12 +319,6 @@
     <div class="section">
       <div class="section-title">Path Config</div>
       <div id="path-info">No path selected</div>
-
-      <div class="offset-row">
-        <label>Path length</label>
-        <input type="number" id="path-length-m" value="" min="0.1" step="any" placeholder="e.g. 200" oninput="onPathLengthChange()" />
-        <span class="offset-unit">m</span>
-      </div>
 
       <div class="offset-row">
         <label>Start offset</label>
@@ -351,10 +361,11 @@
         <div class="sim-row">
           <label>Speed</label>
           <input type="number" id="seg-speed" value="30" min="0.01" step="any" />
-          <select id="seg-speed-unit">
-            <option value="km/h" selected>km/h</option>
-            <option value="m/s">m/s</option>
-            <option value="mph">mph</option>
+          <select id="seg-speed-unit" class="speed-unit-select">
+            <option value="cu/s" selected>cu/s</option>
+            <option value="km/h" disabled>km/h</option>
+            <option value="m/s" disabled>m/s</option>
+            <option value="mph" disabled>mph</option>
           </select>
         </div>
 
