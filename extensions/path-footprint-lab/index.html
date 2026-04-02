@@ -26,215 +26,158 @@
     }
     .separator { height: 1px; background: #e4e4e7; margin: 8px 0; }
 
-    /* No-path empty state */
-    #no-path-state {
+    /* ===== Scene path tabs ===== */
+    .path-tabs {
       display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 180px;
-      text-align: center;
-      color: #9ca3af;
-      padding: 24px 16px;
+      gap: 3px;
+      flex-wrap: wrap;
+      margin-bottom: 6px;
     }
-    #no-path-state .empty-icon { width: 48px; height: 48px; margin-bottom: 12px; opacity: 0.4; }
-    #no-path-state .empty-title { font-size: 12px; font-weight: 600; color: #6b7280; margin-bottom: 4px; }
-    #no-path-state .empty-hint { font-size: 10px; color: #9ca3af; line-height: 1.4; }
+    .path-tab {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      padding: 4px 8px;
+      border: 1px solid #e4e4e7;
+      border-radius: 5px;
+      background: #f9fafb;
+      cursor: pointer;
+      font-size: 9px;
+      font-weight: 500;
+      color: #6b7280;
+      transition: all 0.15s;
+      max-width: 120px;
+      overflow: hidden;
+    }
+    .path-tab:hover { border-color: #a5b4fc; }
+    .path-tab.active {
+      background: #e0e7ff;
+      border-color: #818cf8;
+      color: #4f46e5;
+      font-weight: 600;
+    }
+    .path-tab .color-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .path-tab .path-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .path-tab .tab-remove {
+      width: 14px; height: 14px;
+      font-size: 9px; line-height: 14px; text-align: center;
+      background: none; border: none; color: #9ca3af;
+      border-radius: 3px; cursor: pointer; flex-shrink: 0; padding: 0;
+    }
+    .path-tab .tab-remove:hover { background: #fef2f2; color: #dc2626; }
 
-    /* Path-selected panel */
-    #path-panel { display: none; }
+    /* Empty scene state */
+    .scene-empty {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; min-height: 140px; text-align: center;
+      color: #9ca3af; padding: 16px;
+    }
+    .scene-empty .empty-icon { width: 48px; height: 48px; margin-bottom: 10px; opacity: 0.4; }
+    .scene-empty .empty-title { font-size: 12px; font-weight: 600; color: #6b7280; margin-bottom: 4px; }
+    .scene-empty .empty-hint { font-size: 10px; color: #9ca3af; line-height: 1.4; }
+
+    /* Path config panel (hidden when no active path) */
+    #path-config { display: none; }
 
     #path-info {
-      font-size: 10px;
-      color: #374151;
-      background: #f9fafb;
-      padding: 4px 6px;
-      border-radius: 4px;
-      margin-bottom: 6px;
+      font-size: 10px; color: #374151;
+      background: #f9fafb; padding: 4px 6px;
+      border-radius: 4px; margin-bottom: 6px;
     }
 
     /* Participant count badge */
     .participant-badge {
-      display: inline-block;
-      font-size: 9px;
-      font-weight: 600;
-      background: #e0e7ff;
-      color: #4f46e5;
-      padding: 1px 6px;
-      border-radius: 8px;
-      margin-left: 4px;
+      display: inline-block; font-size: 9px; font-weight: 600;
+      background: #e0e7ff; color: #4f46e5;
+      padding: 1px 6px; border-radius: 8px; margin-left: 4px;
     }
 
-    /* ===== Mode Tabs ===== */
-    .mode-tabs {
-      display: flex;
-      gap: 2px;
-      background: #f4f4f5;
-      border-radius: 6px;
-      padding: 2px;
-      margin-bottom: 8px;
+    /* Start offset row */
+    .offset-row {
+      display: flex; align-items: center; gap: 4px; margin-bottom: 6px;
     }
-    .mode-tab {
-      flex: 1;
-      padding: 5px 8px;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 9px;
-      font-weight: 600;
-      color: #71717a;
-      background: transparent;
-      transition: all 0.15s;
-      text-align: center;
+    .offset-row label {
+      font-size: 9px; font-weight: 500; color: #6b7280; width: 70px; flex-shrink: 0;
     }
-    .mode-tab:hover { color: #374151; }
-    .mode-tab.active {
-      background: #fff;
-      color: #4f46e5;
-      box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+    .offset-row input[type="number"] {
+      flex: 1; min-width: 0; padding: 3px 5px;
+      border: 1px solid #e4e4e7; border-radius: 4px;
+      font-size: 10px; font-family: inherit; color: #374151;
+      background: #fff; outline: none;
     }
-    .mode-panel { display: none; }
-    .mode-panel.active { display: block; }
+    .offset-row input[type="number"]:focus { border-color: #a5b4fc; }
+    .offset-row .offset-unit { font-size: 9px; color: #6b7280; width: 24px; }
 
-    /* ===== Simulation: segment cards ===== */
+    /* ===== Segment cards ===== */
     .seg-card {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      padding: 5px 6px;
-      margin-bottom: 3px;
-      background: #f9fafb;
-      border: 1px solid #e4e4e7;
-      border-radius: 5px;
-      font-size: 9px;
-      color: #374151;
+      display: flex; align-items: center; gap: 4px;
+      padding: 5px 6px; margin-bottom: 3px;
+      background: #f9fafb; border: 1px solid #e4e4e7;
+      border-radius: 5px; font-size: 9px; color: #374151;
     }
-    .seg-card .seg-num {
-      width: 14px;
-      font-size: 8px;
-      font-weight: 700;
-      color: #a5b4fc;
-      text-align: center;
-      flex-shrink: 0;
-    }
-    .seg-card .seg-info {
-      flex: 1;
-      line-height: 1.35;
-    }
+    .seg-card .seg-num { width: 14px; font-size: 8px; font-weight: 700; color: #a5b4fc; text-align: center; flex-shrink: 0; }
+    .seg-card .seg-info { flex: 1; line-height: 1.35; }
     .seg-card .seg-info .seg-main { font-weight: 500; }
     .seg-card .seg-info .seg-detail { font-size: 8px; color: #9ca3af; }
-    .seg-card .seg-remove {
-      width: 18px;
-      height: 18px;
-      padding: 0;
-      font-size: 10px;
-      line-height: 18px;
-      text-align: center;
-      background: none;
-      color: #dc2626;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      flex-shrink: 0;
-    }
+    .seg-card .seg-remove { width: 18px; height: 18px; padding: 0; font-size: 10px; line-height: 18px; text-align: center; background: none; color: #dc2626; border: none; border-radius: 4px; cursor: pointer; flex-shrink: 0; }
     .seg-card .seg-remove:hover { background: #fef2f2; }
+    .seg-empty { font-size: 9px; color: #9ca3af; text-align: center; padding: 8px 0 4px; font-style: italic; }
 
-    .seg-empty {
-      font-size: 9px;
-      color: #9ca3af;
-      text-align: center;
-      padding: 8px 0 4px;
-      font-style: italic;
-    }
-
-    /* ===== Simulation: add-segment form ===== */
+    /* ===== Add-segment form ===== */
     .sim-form {
-      background: #fafbff;
-      border: 1px dashed #c7d2fe;
-      border-radius: 6px;
-      padding: 6px;
-      margin-top: 6px;
+      background: #fafbff; border: 1px dashed #c7d2fe;
+      border-radius: 6px; padding: 6px; margin-top: 6px;
     }
-    .sim-form-title {
-      font-size: 8px;
-      font-weight: 600;
-      color: #a5b4fc;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      margin-bottom: 4px;
-    }
-    .sim-row {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      margin-bottom: 4px;
-    }
-    .sim-row label {
-      width: 50px;
-      font-size: 9px;
-      font-weight: 500;
-      color: #6b7280;
-      flex-shrink: 0;
-    }
+    .sim-form-title { font-size: 8px; font-weight: 600; color: #a5b4fc; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+    .sim-row { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
+    .sim-row label { width: 50px; font-size: 9px; font-weight: 500; color: #6b7280; flex-shrink: 0; }
     .sim-row input[type="number"] {
-      flex: 1;
-      min-width: 0;
-      padding: 3px 5px;
-      border: 1px solid #e4e4e7;
-      border-radius: 4px;
-      font-size: 10px;
-      font-family: inherit;
-      color: #374151;
-      background: #fff;
-      outline: none;
-      transition: border-color 0.15s;
+      flex: 1; min-width: 0; padding: 3px 5px;
+      border: 1px solid #e4e4e7; border-radius: 4px;
+      font-size: 10px; font-family: inherit; color: #374151; background: #fff; outline: none;
     }
     .sim-row input[type="number"]:focus { border-color: #a5b4fc; }
-    .sim-row input[type="number"]::-webkit-inner-spin-button,
-    .sim-row input[type="number"]::-webkit-outer-spin-button { opacity: 1; }
     .sim-row select {
-      width: 60px;
-      padding: 3px 3px;
-      border: 1px solid #e4e4e7;
-      border-radius: 4px;
-      font-size: 9px;
-      font-family: inherit;
-      color: #374151;
-      background: #fff;
-      cursor: pointer;
-      outline: none;
-      flex-shrink: 0;
+      width: 60px; padding: 3px 3px; border: 1px solid #e4e4e7; border-radius: 4px;
+      font-size: 9px; font-family: inherit; color: #374151; background: #fff; cursor: pointer; outline: none; flex-shrink: 0;
     }
     .sim-row select:focus { border-color: #a5b4fc; }
 
     /* Totals preview */
     .sim-totals {
-      background: #f0fdf4;
-      border: 1px solid #bbf7d0;
-      border-radius: 6px;
-      padding: 5px 8px;
-      margin-top: 6px;
-      font-size: 9px;
-      color: #166534;
-      line-height: 1.5;
+      background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px;
+      padding: 5px 8px; margin-top: 6px; font-size: 9px; color: #166534; line-height: 1.5;
     }
     .sim-totals.empty { background: #f9fafb; border-color: #e4e4e7; color: #9ca3af; }
-    .sim-totals .totals-line {
-      display: flex;
-      justify-content: space-between;
-    }
+    .sim-totals .totals-line { display: flex; justify-content: space-between; }
     .sim-totals .totals-value { font-weight: 600; }
+
+    /* ===== Global Timeline ===== */
+    #global-timeline-section { display: none; }
+    #timeline-canvas {
+      width: 100%; height: 80px;
+      border: 1px solid #e4e4e7; border-radius: 6px; background: #fafbff;
+    }
+    .timeline-legend {
+      display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px;
+    }
+    .legend-item {
+      display: flex; align-items: center; gap: 3px; font-size: 8px; color: #6b7280;
+    }
+    .legend-dot { width: 6px; height: 6px; border-radius: 50%; }
 
     /* Buttons */
     .btn {
-      padding: 4px 8px;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 9px;
-      font-weight: 500;
-      transition: all 0.15s;
-      outline: none;
+      padding: 4px 8px; border: none; border-radius: 4px; cursor: pointer;
+      font-size: 9px; font-weight: 500; transition: all 0.15s; outline: none;
     }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .btn-default { background: #f4f4f5; color: #71717a; }
@@ -247,125 +190,56 @@
     .btn-danger:hover:not(:disabled) { background: #fee2e2; }
     .btn-small { padding: 2px 6px; font-size: 9px; }
 
-    .btn-cta {
-      background: #4f46e5;
-      color: #fff;
-      width: 100%;
-      padding: 8px 12px;
-      font-size: 10px;
-      font-weight: 600;
-      border-radius: 6px;
-      margin-top: 6px;
-    }
-    .btn-cta:hover:not(:disabled) { background: #4338ca; }
-
     .btn-add-seg {
-      background: #4f46e5;
-      color: #fff;
-      width: 100%;
-      padding: 5px 10px;
-      font-size: 9px;
-      font-weight: 600;
-      border-radius: 5px;
-      margin-top: 2px;
+      background: #4f46e5; color: #fff; width: 100%; padding: 5px 10px;
+      font-size: 9px; font-weight: 600; border-radius: 5px; margin-top: 2px;
     }
     .btn-add-seg:hover:not(:disabled) { background: #4338ca; }
 
     .btn-generate {
-      background: #059669;
-      color: #fff;
-      width: 100%;
-      padding: 7px 12px;
-      font-size: 10px;
-      font-weight: 600;
-      border-radius: 6px;
-      margin-top: 6px;
+      background: #059669; color: #fff; width: 100%; padding: 7px 12px;
+      font-size: 10px; font-weight: 600; border-radius: 6px; margin-top: 6px;
     }
     .btn-generate:hover:not(:disabled) { background: #047857; }
 
-    .update-banner {
-      display: none;
-      background: #fefce8;
-      border: 1px solid #fde68a;
-      border-radius: 6px;
-      padding: 6px 8px;
-      margin-top: 6px;
-      font-size: 9px;
-      color: #92400e;
-      text-align: center;
+    .btn-cta {
+      background: #4f46e5; color: #fff; width: 100%; padding: 8px 12px;
+      font-size: 10px; font-weight: 600; border-radius: 6px; margin-top: 6px;
     }
-    .update-banner .update-text { margin-bottom: 4px; }
-    .update-banner .btn-update {
-      background: #f59e0b;
-      color: #fff;
-      width: 100%;
-      padding: 5px 10px;
-      font-size: 10px;
-      font-weight: 600;
+    .btn-cta:hover:not(:disabled) { background: #4338ca; }
+
+    .btn-place-all {
+      background: #7c3aed; color: #fff; width: 100%; padding: 7px 12px;
+      font-size: 10px; font-weight: 600; border-radius: 6px; margin-top: 6px;
     }
-    .update-banner .btn-update:hover { background: #d97706; }
+    .btn-place-all:hover:not(:disabled) { background: #6d28d9; }
 
     /* Slider */
     input[type="range"] {
-      -webkit-appearance: none;
-      width: 100%;
-      height: 4px;
-      background: #e4e4e7;
-      border-radius: 2px;
-      outline: none;
-      margin: 4px 0;
+      -webkit-appearance: none; width: 100%; height: 4px;
+      background: #e4e4e7; border-radius: 2px; outline: none; margin: 4px 0;
     }
     input[type="range"]::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      width: 16px; height: 16px;
-      background: #a5b4fc;
-      border-radius: 50%;
-      cursor: pointer;
-      border: 2px solid white;
-      box-shadow: 0 0 2px rgba(0,0,0,0.2);
-    }
-    input[type="range"]::-moz-range-thumb {
-      width: 16px; height: 16px;
-      background: #a5b4fc;
-      border-radius: 50%;
-      cursor: pointer;
-      border: 2px solid white;
-      box-shadow: 0 0 2px rgba(0,0,0,0.2);
+      -webkit-appearance: none; width: 16px; height: 16px;
+      background: #a5b4fc; border-radius: 50%; cursor: pointer;
+      border: 2px solid white; box-shadow: 0 0 2px rgba(0,0,0,0.2);
     }
 
     .footprint-row {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      margin-bottom: 4px;
-      padding: 4px 6px;
-      background: #f9fafb;
-      border-radius: 4px;
-      border: 1px solid #e4e4e7;
+      display: flex; align-items: center; gap: 4px; margin-bottom: 4px;
+      padding: 4px 6px; background: #f9fafb; border-radius: 4px; border: 1px solid #e4e4e7;
     }
     .footprint-row .index { width: 16px; font-size: 9px; color: #9ca3af; text-align: center; }
     .footprint-row input[type="range"] { flex: 1; }
-    .footprint-row .t-value {
-      width: 32px; text-align: right;
-      font-size: 9px; font-weight: 500; color: #6b7280;
-    }
-    .footprint-row .btn-remove {
-      width: 18px; height: 18px; padding: 0;
-      font-size: 10px; line-height: 18px; text-align: center;
-      background: none; color: #dc2626; border: none;
-      border-radius: 4px; cursor: pointer;
-    }
-    .footprint-row .btn-remove:hover { background: #fef2f2; }
+    .footprint-row .t-value { width: 32px; text-align: right; font-size: 9px; font-weight: 500; color: #6b7280; }
 
     .format-btn { flex: none; padding: 4px 8px; }
     .format-btn.active { background: #e0e7ff; color: #4f46e5; }
 
     .template-btn {
-      width: 36px; height: 36px; padding: 2px;
-      border-radius: 6px; border: 1px solid #e4e4e7;
-      background: #fff; cursor: pointer;
-      display: flex; align-items: center; justify-content: center;
-      transition: all 0.15s;
+      width: 36px; height: 36px; padding: 2px; border-radius: 6px;
+      border: 1px solid #e4e4e7; background: #fff; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; transition: all 0.15s;
     }
     .template-btn:hover { border-color: #a5b4fc; }
     .template-btn.active { border: 2px solid #a5b4fc; background: #e0e7ff; }
@@ -380,28 +254,53 @@
       animation: pulse 1.5s ease-in-out infinite;
     }
     @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.4 } }
+
+    /* JSON import */
+    .json-drop-zone {
+      border: 1px dashed #c7d2fe; border-radius: 6px; padding: 8px;
+      text-align: center; font-size: 9px; color: #9ca3af; cursor: pointer;
+      transition: all 0.15s;
+    }
+    .json-drop-zone:hover { border-color: #818cf8; color: #6b7280; }
+    .json-drop-zone.drag-over { background: #e0e7ff; border-color: #4f46e5; }
+    #json-file-input { display: none; }
+
+    /* Video section */
+    #video-section { display: none; }
+    #vid-progress-wrap { display: none; }
   </style>
 </head>
 <body>
 
-  <!-- ==================== NO PATH SELECTED ==================== -->
-  <div id="no-path-state">
-    <svg class="empty-icon" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M10 38 C14 26, 20 14, 24 12 S34 18, 38 10" stroke="#d1d5db" stroke-width="2.5" stroke-linecap="round" fill="none" stroke-dasharray="4 3"/>
-      <circle cx="10" cy="38" r="3" fill="#d1d5db"/>
-      <circle cx="38" cy="10" r="3" fill="#d1d5db"/>
-      <rect x="20" y="20" width="8" height="14" rx="1" stroke="#d1d5db" stroke-width="1.5" fill="none"/>
-    </svg>
-    <div class="empty-title">No Path Selected</div>
-    <div class="empty-hint">Draw a path using the Path tool, then select it to place participants along it.</div>
+  <!-- ==================== SCENE PATHS ==================== -->
+  <div class="section">
+    <div class="section-title">Scene Paths</div>
+    <div class="path-tabs" id="path-tabs"></div>
+    <div id="scene-empty" class="scene-empty">
+      <svg class="empty-icon" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M10 38 C14 26, 20 14, 24 12 S34 18, 38 10" stroke="#d1d5db" stroke-width="2.5" stroke-linecap="round" fill="none" stroke-dasharray="4 3"/>
+        <circle cx="10" cy="38" r="3" fill="#d1d5db"/>
+        <circle cx="38" cy="10" r="3" fill="#d1d5db"/>
+        <rect x="20" y="20" width="8" height="14" rx="1" stroke="#d1d5db" stroke-width="1.5" fill="none"/>
+      </svg>
+      <div class="empty-title">No Paths in Scene</div>
+      <div class="empty-hint">Draw a path using the Path tool, then select it to add it to the scene. Or import a JSON scene below.</div>
+    </div>
   </div>
+  <div class="separator"></div>
 
-  <!-- ==================== PATH SELECTED PANEL ==================== -->
-  <div id="path-panel">
+  <!-- ==================== ACTIVE PATH CONFIG ==================== -->
+  <div id="path-config">
 
     <div class="section">
-      <div class="section-title">Selected Path</div>
+      <div class="section-title">Path Config</div>
       <div id="path-info">No path selected</div>
+
+      <div class="offset-row">
+        <label>Start offset</label>
+        <input type="number" id="path-start-offset" value="0" min="0" step="0.1" oninput="onStartOffsetChange()" />
+        <span class="offset-unit">sec</span>
+      </div>
     </div>
     <div class="separator"></div>
 
@@ -411,176 +310,154 @@
     </div>
     <div class="separator"></div>
 
-    <!-- ==================== POSITIONING ==================== -->
+    <!-- ==================== SEGMENTS ==================== -->
     <div class="section">
       <div class="section-title">
-        Participants
+        Speed Profile
         <span class="participant-badge" id="participant-count">0</span>
       </div>
 
-      <div class="mode-tabs">
-        <button class="mode-tab active" data-mode="manual" onclick="switchMode('manual')">Manual</button>
-        <button class="mode-tab" data-mode="simulation" onclick="switchMode('simulation')">Simulation</button>
-      </div>
+      <div id="seg-list"></div>
 
-      <!-- ===== MANUAL MODE ===== -->
-      <div id="mode-manual" class="mode-panel active">
-        <div id="footprint-list"></div>
-        <div style="display: flex; gap: 4px; margin-top: 4px;">
-          <button class="btn btn-default" onclick="addFootprint()" style="flex:1;">+ Add Participant</button>
-          <button class="btn btn-danger btn-small" onclick="removeLastFootprint()" id="btn-remove-last" style="display:none;">− Remove Last</button>
+      <div class="sim-form">
+        <div class="sim-form-title">Add Segment</div>
+        <div class="sim-row">
+          <label>Speed</label>
+          <input type="number" id="seg-speed" value="30" min="0.01" step="any" />
+          <select id="seg-speed-unit">
+            <option value="km/h" selected>km/h</option>
+            <option value="m/s">m/s</option>
+            <option value="mph">mph</option>
+          </select>
         </div>
-      </div>
-
-      <!-- ===== SIMULATION MODE ===== -->
-      <div id="mode-simulation" class="mode-panel">
-
-        <!-- Segment list -->
-        <div id="seg-list"></div>
-
-        <!-- Add segment form -->
-        <div class="sim-form">
-          <div class="sim-form-title">Add Segment</div>
-          <div class="sim-row">
-            <label>Speed</label>
-            <input type="number" id="seg-speed" value="30" min="0.01" step="any" />
-            <select id="seg-speed-unit">
-              <option value="km/h" selected>km/h</option>
-              <option value="m/s">m/s</option>
-              <option value="mph">mph</option>
-            </select>
-          </div>
-          <div class="sim-row">
-            <label>Duration</label>
-            <input type="number" id="seg-time" value="10" min="0.01" step="any" />
-            <select id="seg-time-unit">
-              <option value="s">sec</option>
-              <option value="min" selected>min</option>
-              <option value="hr">hr</option>
-            </select>
-          </div>
-          <div class="sim-row">
-            <label>Samples</label>
-            <input type="number" id="seg-rate" value="5" min="1" step="1" />
-            <select id="seg-rate-unit">
-              <option value="total" selected>total</option>
-              <option value="/s">/sec</option>
-              <option value="/min">/min</option>
-              <option value="/hr">/hr</option>
-            </select>
-          </div>
-          <button class="btn btn-add-seg" onclick="addSegment()">+ Add Segment</button>
-        </div>
-
-        <!-- Totals -->
-        <div class="sim-totals empty" id="sim-totals">
-          <div style="text-align:center;">Add segments to build a speed profile</div>
-        </div>
-
-        <!-- Generate -->
-        <button class="btn btn-generate" id="btn-generate" onclick="generateFromSimulation()" disabled>
-          ⚡ Generate Positions
-        </button>
-      </div>
-
-      <!-- ===== SHARED: Place / Update / Live ===== -->
-      <button class="btn btn-cta" id="btn-place" onclick="placeParticipants()" style="display:none;">
-        ▶ Place Participants on Path
-      </button>
-      <div class="update-banner" id="update-banner">
-        <div class="update-text">Participant count changed — update positions to sync.</div>
-        <button class="btn btn-update" onclick="updateParticipantPositions()">↻ Update Positions</button>
-      </div>
-      <div id="live-indicator" style="display:none; margin-top: 6px; font-size: 9px; color: #22c55e;">
-        <span class="live-dot"></span> Live — drag sliders to reposition
-      </div>
-    </div>
-    <div class="separator"></div>
-
-    <!-- ==================== VIDEO EXPORT ==================== -->
-    <div class="section" id="video-section">
-      <div class="section-title">Video Export</div>
-
-      <div id="video-needs-footprints" style="font-size:9px; color:#9ca3af; text-align:center; padding:6px 0; font-style:italic;">
-        Generate or add participants first
-      </div>
-
-      <div id="video-controls" style="display:none;">
         <div class="sim-row">
           <label>Duration</label>
-          <input type="number" id="vid-duration" value="10" min="1" max="120" step="1" oninput="onVideoSettingsChange()" />
-          <span style="font-size:9px; color:#6b7280; width:48px; text-align:center;">sec</span>
+          <input type="number" id="seg-time" value="10" min="0.01" step="any" />
+          <select id="seg-time-unit">
+            <option value="s">sec</option>
+            <option value="min" selected>min</option>
+            <option value="hr">hr</option>
+          </select>
         </div>
-
-        <div class="sim-totals" id="vid-info" style="margin-top:4px; margin-bottom:4px;">
-          <div class="totals-line"><span>Frames</span><span class="totals-value" id="vid-frame-count">—</span></div>
-          <div class="totals-line"><span>Playback speed</span><span class="totals-value" id="vid-playback-speed">—</span></div>
-          <div class="totals-line"><span>Frame rate range</span><span class="totals-value" id="vid-fps-range">—</span></div>
+        <div class="sim-row">
+          <label>Samples</label>
+          <input type="number" id="seg-rate" value="5" min="1" step="1" />
+          <select id="seg-rate-unit">
+            <option value="total" selected>total</option>
+            <option value="/s">/sec</option>
+            <option value="/min">/min</option>
+            <option value="/hr">/hr</option>
+          </select>
         </div>
-
-        <div style="font-size:8px; color:#9ca3af; margin-bottom:4px;">
-          Captures the full scene as rendered — all lanes, objects, and styles included.
-        </div>
-
-        <!-- Preview canvas -->
-        <div style="position:relative;">
-          <canvas id="vid-canvas" width="640" height="360"
-            style="width:100%; border-radius:6px; border:1px solid #e4e4e7; background:#fff;"></canvas>
-          <div id="vid-capture-spinner" style="display:none; position:absolute; inset:0; background:rgba(255,255,255,0.7); border-radius:6px; display:none; align-items:center; justify-content:center; font-size:9px; color:#6b7280;">
-            Capturing…
-          </div>
-        </div>
-
-        <!-- Frame scrubber -->
-        <div style="display:flex; align-items:center; gap:4px; margin-top:4px;">
-          <span style="font-size:8px; color:#9ca3af; width:10px;">1</span>
-          <input type="range" id="vid-scrub" min="0" max="1" step="1" value="0"
-            oninput="onScrubChange()" style="flex:1;" />
-          <span style="font-size:8px; color:#9ca3af;" id="vid-scrub-max">1</span>
-        </div>
-
-        <div id="vid-progress-wrap" style="display:none; margin-top:6px;">
-          <div style="display:flex; justify-content:space-between; font-size:9px; color:#6b7280; margin-bottom:2px;">
-            <span id="vid-progress-text">Recording...</span>
-            <span id="vid-progress-pct">0%</span>
-          </div>
-          <div style="height:4px; background:#e4e4e7; border-radius:2px; overflow:hidden;">
-            <div id="vid-progress-bar" style="height:100%; background:#4f46e5; border-radius:2px; width:0%; transition: width 0.15s;"></div>
-          </div>
-        </div>
-
-        <div style="display:flex; gap:4px; margin-top:6px;">
-          <button class="btn btn-primary" id="vid-record-btn" onclick="recordVideo()" style="flex:1;">⏺ Record Video</button>
-          <button class="btn btn-danger" id="vid-cancel-btn" onclick="cancelRecording()" style="display:none;">✕</button>
-        </div>
-        <button class="btn btn-success" id="vid-download-btn" onclick="downloadVideo()" style="display:none; width:100%; margin-top:4px;">
-          ⬇ Download Video
-        </button>
+        <button class="btn btn-add-seg" onclick="addSegment()">+ Add Segment</button>
       </div>
+
+      <div class="sim-totals empty" id="sim-totals">
+        <div style="text-align:center;">Add segments to build a speed profile</div>
+      </div>
+
+      <button class="btn btn-generate" id="btn-generate" onclick="generateParticipants()" disabled>
+        ⚡ Generate Positions
+      </button>
     </div>
     <div class="separator"></div>
 
-    <div class="section">
-      <div class="action-row">
-        <button class="btn btn-danger" onclick="clearFootprints()" style="flex:1;">Clear All Participants</button>
-      </div>
+    <!-- ==================== MANUAL FINE-TUNE ==================== -->
+    <div class="section" id="manual-section" style="display:none;">
+      <div class="section-title">Fine-Tune Positions</div>
+      <div id="footprint-list"></div>
+    </div>
+
+    <!-- ===== Place / Live ===== -->
+    <button class="btn btn-cta" id="btn-place" onclick="placeActivePathParticipants()" style="display:none;">
+      ▶ Place on Path
+    </button>
+    <div id="live-indicator" style="display:none; margin-top: 6px; font-size: 9px; color: #22c55e;">
+      <span class="live-dot"></span> Live — drag sliders to reposition
+    </div>
+
+    <div class="section" style="margin-top: 6px;">
+      <button class="btn btn-danger" onclick="clearActivePath()" style="width:100%;">Remove Path from Scene</button>
       <div class="status" id="status"></div>
     </div>
     <div class="separator"></div>
+  </div>
 
-    <div class="section">
-      <div class="section-title">Export</div>
-      <div style="display: flex; gap: 4px; margin-bottom: 6px; flex-wrap: wrap;">
-        <button class="btn btn-default format-btn active" data-format="svg">SVG</button>
-        <button class="btn btn-default format-btn" data-format="png">PNG</button>
-        <button class="btn btn-default format-btn" data-format="jpeg">JPEG</button>
-        <button class="btn btn-default format-btn" data-format="pdf">PDF</button>
-        <button class="btn btn-default format-btn" data-format="eps">EPS</button>
-        <button class="btn btn-default format-btn" data-format="drawtonomy.svg">.drawtonomy.svg</button>
-      </div>
-      <button class="btn btn-default" onclick="exportScene()" style="width: 100%;">Export</button>
-      <div class="status" id="export-status"></div>
+  <!-- ==================== GLOBAL TIMELINE ==================== -->
+  <div class="section" id="global-timeline-section">
+    <div class="section-title">Global Timeline</div>
+    <canvas id="timeline-canvas" width="600" height="80"></canvas>
+    <div class="timeline-legend" id="timeline-legend"></div>
+    <button class="btn btn-place-all" id="btn-place-all" onclick="placeAllPaths()" style="margin-top:6px;">
+      ▶ Place All Paths
+    </button>
+  </div>
+  <div class="separator"></div>
+
+  <!-- ==================== VIDEO EXPORT ==================== -->
+  <div class="section" id="video-section">
+    <div class="section-title">Video Export</div>
+    <div class="sim-row">
+      <label>Duration</label>
+      <input type="number" id="vid-duration" value="10" min="1" max="120" step="1" oninput="onVideoSettingsChange()" />
+      <span style="font-size:9px; color:#6b7280; width:48px; text-align:center;">sec</span>
     </div>
+    <div class="sim-totals" id="vid-info" style="margin-top:4px; margin-bottom:4px;">
+      <div class="totals-line"><span>Keyframes</span><span class="totals-value" id="vid-frame-count">—</span></div>
+      <div class="totals-line"><span>Active paths</span><span class="totals-value" id="vid-active-paths">—</span></div>
+      <div class="totals-line"><span>Real duration</span><span class="totals-value" id="vid-real-duration">—</span></div>
+    </div>
+
+    <canvas id="vid-canvas" width="640" height="360"
+      style="width:100%; border-radius:6px; border:1px solid #e4e4e7; background:#fff;"></canvas>
+
+    <div id="vid-progress-wrap" style="margin-top:6px;">
+      <div style="display:flex; justify-content:space-between; font-size:9px; color:#6b7280; margin-bottom:2px;">
+        <span id="vid-progress-text">Ready</span>
+        <span id="vid-progress-pct">0%</span>
+      </div>
+      <div style="height:4px; background:#e4e4e7; border-radius:2px; overflow:hidden;">
+        <div id="vid-progress-bar" style="height:100%; background:#4f46e5; border-radius:2px; width:0%; transition: width 0.15s;"></div>
+      </div>
+    </div>
+
+    <div style="display:flex; gap:4px; margin-top:6px;">
+      <button class="btn btn-primary" id="vid-record-btn" onclick="recordVideo()" style="flex:1;">⏺ Record Video</button>
+      <button class="btn btn-danger" id="vid-cancel-btn" onclick="cancelRecording()" style="display:none;">✕</button>
+    </div>
+    <button class="btn btn-success" id="vid-download-btn" onclick="downloadVideo()" style="display:none; width:100%; margin-top:4px;">
+      ⬇ Download Video
+    </button>
+  </div>
+  <div class="separator"></div>
+
+  <!-- ==================== SCENE IMPORT / EXPORT ==================== -->
+  <div class="section">
+    <div class="section-title">Scene</div>
+    <div style="display: flex; gap: 4px; margin-bottom: 6px;">
+      <button class="btn btn-default" onclick="exportSceneJSON()" style="flex:1;">Export JSON</button>
+      <button class="btn btn-default" onclick="document.getElementById('json-file-input').click()" style="flex:1;">Import JSON</button>
+    </div>
+    <input type="file" id="json-file-input" accept=".json" onchange="importSceneJSON(this)" />
+    <div class="json-drop-zone" id="json-drop-zone">
+      Drop .json scene file here
+    </div>
+  </div>
+  <div class="separator"></div>
+
+  <!-- ==================== STATIC EXPORT ==================== -->
+  <div class="section">
+    <div class="section-title">Image Export</div>
+    <div style="display: flex; gap: 4px; margin-bottom: 6px; flex-wrap: wrap;">
+      <button class="btn btn-default format-btn active" data-format="svg">SVG</button>
+      <button class="btn btn-default format-btn" data-format="png">PNG</button>
+      <button class="btn btn-default format-btn" data-format="jpeg">JPEG</button>
+      <button class="btn btn-default format-btn" data-format="pdf">PDF</button>
+      <button class="btn btn-default format-btn" data-format="eps">EPS</button>
+      <button class="btn btn-default format-btn" data-format="drawtonomy.svg">.drawtonomy.svg</button>
+    </div>
+    <button class="btn btn-default" onclick="exportScene()" style="width: 100%;">Export</button>
+    <div class="status" id="export-status"></div>
   </div>
 
   <script type="module" src="./src/main.ts"></script>
