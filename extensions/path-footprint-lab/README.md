@@ -10,8 +10,8 @@ drawtonomy-dev-server
 
 # Terminal 2: Start this extension
 cd extensions/path-footprint-lab
-npm install
-npm run dev
+pnpm install
+pnpm dev
 
 # Browser
 open "http://localhost:3000/?ext=http://localhost:3001/manifest.json"

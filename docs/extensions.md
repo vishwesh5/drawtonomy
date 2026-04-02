@@ -25,7 +25,7 @@ You can develop and test extensions using `@drawtonomy/sdk` and `@drawtonomy/dev
 ### 1. Start the drawtonomy Dev Server
 
 ```bash
-npm install -g @drawtonomy/dev-server
+pnpm add -g @drawtonomy/dev-server
 drawtonomy-dev-server
 # → http://localhost:3000
 ```
@@ -36,8 +36,8 @@ This downloads and serves the same app as `drawtonomy.com` locally.
 
 ```bash
 cd extensions/ai-scene-generator
-npm install
-npm run dev
+pnpm install
+pnpm dev
 # → http://localhost:3001
 ```
 
@@ -93,8 +93,8 @@ my-extension/
 
 ```bash
 mkdir my-extension && cd my-extension
-npm init -y
-npm install @drawtonomy/sdk
+pnpm init
+pnpm add @drawtonomy/sdk
 ```
 
 ### Step 2: Create Manifest
@@ -181,7 +181,7 @@ document.getElementById('addBtn')!.addEventListener('click', () => {
 npx serve . --port 3001
 
 # Using Vite
-npm run dev -- --port 3001
+pnpm dev --port 3001
 ```
 
 ### Step 5: Load in drawtonomy
@@ -191,7 +191,7 @@ npm run dev -- --port 3001
 drawtonomy-dev-server
 
 # Terminal 2: Your extension
-npm run dev -- --port 3001
+pnpm dev --port 3001
 
 # Browser
 open "http://localhost:3000/?ext=http://localhost:3001/manifest.json"
@@ -412,7 +412,7 @@ Use `@drawtonomy/dev-server` for local development:
 drawtonomy-dev-server
 
 # Terminal 2
-npm run dev -- --port 3001
+pnpm dev --port 3001
 
 # Browser
 open "http://localhost:3000/?ext=http://localhost:3001/manifest.json"

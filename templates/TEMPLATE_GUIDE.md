@@ -36,8 +36,8 @@ drawtonomy-dev-server
 
 # Terminal 2: Start the extension
 cd extensions/template-preview
-npm install
-npm run dev
+pnpm install
+pnpm dev
 
 # Open in browser
 open "http://localhost:3000/?ext=http://localhost:3002/manifest.json"

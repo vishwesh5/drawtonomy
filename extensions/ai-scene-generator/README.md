@@ -26,13 +26,13 @@ Generated from [ASAM OpenSCENARIO DSL - Euro NCAP scenario example](https://publ
 
 ```bash
 # Terminal 1: Start drawtonomy dev server
-npm install -g @drawtonomy/dev-server
+pnpm add -g @drawtonomy/dev-server
 drawtonomy-dev-server
 
 # Terminal 2: Start the sample extension
 cd extensions/ai-scene-generator
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
 
 Open in browser:
@@ -153,7 +153,7 @@ A parking lot with 5 cars and a pedestrian walking
 Minimal steps to create a new extension based on this sample:
 
 1. Create `manifest.json` and declare required capabilities
-2. `npm install @drawtonomy/sdk`
+2. `pnpm add @drawtonomy/sdk`
 3. Initialize `ExtensionClient` and wait for connection with `waitForInit()`
 4. Communicate with drawtonomy using SDK APIs (`addShapes()`, `requestShapes()`, etc.)
 5. Add `server: { cors: true }` to `vite.config.ts` (for sandboxed iframe)
