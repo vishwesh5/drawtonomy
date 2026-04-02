@@ -305,6 +305,12 @@
       <div id="path-info">No path selected</div>
 
       <div class="offset-row">
+        <label>Path length</label>
+        <input type="number" id="path-length-m" value="" min="0.1" step="any" placeholder="e.g. 200" oninput="onPathLengthChange()" />
+        <span class="offset-unit">m</span>
+      </div>
+
+      <div class="offset-row">
         <label>Start offset</label>
         <input type="number" id="path-start-offset" value="0" min="0" step="0.1" oninput="onStartOffsetChange()" />
         <span class="offset-unit">sec</span>
@@ -329,6 +335,19 @@
 
       <div class="sim-form">
         <div class="sim-form-title">Add Segment</div>
+
+        <!-- Mode toggle -->
+        <div style="display:flex; gap:2px; background:#f4f4f5; border-radius:5px; padding:2px; margin-bottom:5px;">
+          <label style="flex:1; text-align:center; padding:3px 6px; border-radius:3px; font-size:8px; font-weight:600; cursor:pointer; transition:all 0.15s;" id="seg-mode-time-label">
+            <input type="radio" name="seg-mode" value="time" checked onchange="onSegModeChange()" style="display:none;" />
+            <span>Time</span>
+          </label>
+          <label style="flex:1; text-align:center; padding:3px 6px; border-radius:3px; font-size:8px; font-weight:600; cursor:pointer; transition:all 0.15s;" id="seg-mode-pct-label">
+            <input type="radio" name="seg-mode" value="percent" onchange="onSegModeChange()" style="display:none;" />
+            <span>Path %</span>
+          </label>
+        </div>
+
         <div class="sim-row">
           <label>Speed</label>
           <input type="number" id="seg-speed" value="30" min="0.01" step="any" />
@@ -338,15 +357,25 @@
             <option value="mph">mph</option>
           </select>
         </div>
-        <div class="sim-row">
+
+        <!-- Time mode fields -->
+        <div class="sim-row" id="seg-time-row">
           <label>Duration</label>
           <input type="number" id="seg-time" value="10" min="0.01" step="any" />
           <select id="seg-time-unit">
-            <option value="s">sec</option>
-            <option value="min" selected>min</option>
+            <option value="s" selected>sec</option>
+            <option value="min">min</option>
             <option value="hr">hr</option>
           </select>
         </div>
+
+        <!-- Percent mode fields -->
+        <div class="sim-row" id="seg-pct-row" style="display:none;">
+          <label>Path %</label>
+          <input type="number" id="seg-percent" value="25" min="0.1" max="100" step="any" />
+          <span style="font-size:9px; color:#6b7280; width:60px; text-align:center;">%</span>
+        </div>
+
         <button class="btn btn-add-seg" onclick="addSegment()">+ Add Segment</button>
       </div>
 
