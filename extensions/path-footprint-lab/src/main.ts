@@ -1106,6 +1106,18 @@ async function captureFrameAtPosition(tValue: number): Promise<string> {
   await clearPlacedShapes()
   await new Promise(r => setTimeout(r, 100))
 
+  // 1b. Re-fetch path coordinates (guards against canvas pan/zoom since last call)
+  try {
+    const freshShapes = await client.requestShapes({ ids: [selectedPathId] })
+    const freshPath = freshShapes.find(s => s.id === selectedPathId)
+    if (freshPath) {
+      const dp = freshPath.props._displayPoints as Point2D[] | undefined
+      if (dp && dp.length >= 2) selectedPathPoints = dp
+    }
+  } catch (e) {
+    console.warn('[FootprintLab] Preview path refresh failed, using cached:', e)
+  }
+
   // 2. Place single shape at this t-value
   const ev = evaluatePathAt(selectedPathPoints, tValue)
   const shape = buildFrameShape(ev, selectedPathId)
@@ -1274,6 +1286,10 @@ function onScrubChange() {
 // =============================================================================
 // RECORDING — Host-based scene capture per frame
 // =============================================================================
+// FIX: Each frame now re-fetches _displayPoints from the host before computing
+// the vehicle position. This makes each frame independently correct ("idempotent
+// frame capture") even if the user pans, zooms, or moves the canvas mid-recording.
+// =============================================================================
 
 async function recordVideo() {
   if (footprints.length === 0) { setStatus('No participants to animate'); return }
@@ -1348,7 +1364,7 @@ async function recordVideo() {
   const pathId = selectedPathId
 
   try {
-    // Refresh path display points
+    // Initial path fetch (seed value; each frame will re-fetch below)
     const freshShapes = await client.requestShapes({ ids: [pathId] })
     const freshPath = freshShapes.find(s => s.id === pathId)
     if (freshPath) {
@@ -1369,6 +1385,20 @@ async function recordVideo() {
       await clearPlacedShapes()
       if (videoCancelled) break
       await new Promise(r => setTimeout(r, 80))
+
+      // 1b. Re-fetch path coordinates (guards against canvas pan/zoom mid-recording)
+      //     Each frame is independently correct regardless of prior state.
+      try {
+        const framePathShapes = await client.requestShapes({ ids: [pathId] })
+        const framePath = framePathShapes.find(s => s.id === pathId)
+        if (framePath) {
+          const dp = framePath.props._displayPoints as Point2D[] | undefined
+          if (dp && dp.length >= 2) selectedPathPoints = dp
+        }
+      } catch (e) {
+        console.warn(`[FootprintLab] Frame ${i + 1} path refresh failed, using cached:`, e)
+      }
+      if (videoCancelled) break
 
       // 2. Place single vehicle at this frame's position
       const ev = evaluatePathAt(selectedPathPoints, frame.tValue)
