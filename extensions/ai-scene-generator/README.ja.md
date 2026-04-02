@@ -26,13 +26,13 @@
 
 ```bash
 # ターミナル1: drawtonomy dev serverを起動
-npm install -g @drawtonomy/dev-server
+pnpm add -g @drawtonomy/dev-server
 drawtonomy-dev-server
 
 # ターミナル2: サンプルエクステンションを起動
 cd extensions/ai-scene-generator
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
 
 ブラウザで以下にアクセス:

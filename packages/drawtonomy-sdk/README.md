@@ -7,7 +7,7 @@ SDK for building drawtonomy extensions.
 ## Install
 
 ```bash
-npm install @drawtonomy/sdk
+pnpm add @drawtonomy/sdk
 ```
 
 ## Quick Start
@@ -63,7 +63,7 @@ client.notify('Done!', 'success')
 drawtonomy-dev-server
 
 # Terminal 2: Your extension
-npm run dev -- --port 3001
+pnpm dev --port 3001
 ```
 
 ### 4. Open in browser

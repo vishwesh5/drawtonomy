@@ -25,7 +25,7 @@
 ### 1. drawtonomy Dev Serverを起動
 
 ```bash
-npm install -g @drawtonomy/dev-server
+pnpm add -g @drawtonomy/dev-server
 drawtonomy-dev-server
 # → http://localhost:3000
 ```
@@ -36,8 +36,8 @@ drawtonomy-dev-server
 
 ```bash
 cd extensions/ai-scene-generator
-npm install
-npm run dev
+pnpm install
+pnpm dev
 # → http://localhost:3001
 ```
 
@@ -93,8 +93,8 @@ my-extension/
 
 ```bash
 mkdir my-extension && cd my-extension
-npm init -y
-npm install @drawtonomy/sdk
+pnpm init
+pnpm add @drawtonomy/sdk
 ```
 
 ### ステップ2: マニフェスト作成
@@ -181,7 +181,7 @@ document.getElementById('addBtn')!.addEventListener('click', () => {
 npx serve . --port 3001
 
 # Viteを使用
-npm run dev -- --port 3001
+pnpm dev --port 3001
 ```
 
 ### ステップ5: drawtonomyで読み込み
@@ -191,7 +191,7 @@ npm run dev -- --port 3001
 drawtonomy-dev-server
 
 # ターミナル2: エクステンション
-npm run dev -- --port 3001
+pnpm dev --port 3001
 
 # ブラウザ
 open "http://localhost:3000/?ext=http://localhost:3001/manifest.json"
@@ -412,7 +412,7 @@ https://drawtonomy.com?ext=https://username.github.io/my-extension/manifest.json
 drawtonomy-dev-server
 
 # ターミナル2
-npm run dev -- --port 3001
+pnpm dev --port 3001
 
 # ブラウザ
 open "http://localhost:3000/?ext=http://localhost:3001/manifest.json"

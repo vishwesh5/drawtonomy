@@ -216,12 +216,12 @@ drawtonomy supports an iframe-based extension system. Build custom extensions us
 
 ```bash
 # Start drawtonomy locally
-npm install -g @drawtonomy/dev-server
+pnpm add -g @drawtonomy/dev-server
 drawtonomy-dev-server
 
 # Start your extension
 cd my-extension
-npm run dev -- --port 3001
+pnpm dev --port 3001
 
 # Open in browser
 open "http://localhost:3000/?ext=http://localhost:3001/manifest.json"

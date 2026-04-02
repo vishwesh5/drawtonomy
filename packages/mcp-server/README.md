@@ -57,7 +57,7 @@ Generates a URL to open a scene in the [drawtonomy web editor](https://www.drawt
 ### Install
 
 ```bash
-npm install @drawtonomy/mcp-server
+pnpm add @drawtonomy/mcp-server
 ```
 
 ### Claude Desktop
@@ -88,8 +88,8 @@ claude mcp add drawtonomy npx @drawtonomy/mcp-server
 ```bash
 git clone https://github.com/kosuke55/drawtonomy.git
 cd drawtonomy/packages/mcp-server
-npm install
-npm run build
+pnpm install
+pnpm build
 ```
 
 Then configure with the local path:

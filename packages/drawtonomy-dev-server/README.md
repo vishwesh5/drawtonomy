@@ -20,7 +20,7 @@ npx @drawtonomy/dev-server
 
 # Terminal 2: Start your extension
 cd my-extension
-npm run dev -- --port 3001
+pnpm dev --port 3001
 
 # Browser
 open "http://localhost:3000/?ext=http://localhost:3001/manifest.json"

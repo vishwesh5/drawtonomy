@@ -7,7 +7,7 @@ drawtonomy エクステンション開発用SDK。
 ## インストール
 
 ```bash
-npm install @drawtonomy/sdk
+pnpm add @drawtonomy/sdk
 ```
 
 ## クイックスタート
@@ -59,7 +59,7 @@ client.notify('完了しました', 'success')
 ### 3. 開発サーバーで起動
 
 ```bash
-npm run dev -- --port 3001
+pnpm dev --port 3001
 ```
 
 ### 4. drawtonomyで読み込む
