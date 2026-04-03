@@ -1203,6 +1203,9 @@ function debouncedLiveUpdate(config: PathConfig) {
 // GLOBAL TIMELINE RENDERING (canvas)
 // =============================================================================
 
+/** Global time of the recording playhead. -1 = hidden. */
+let timelinePlayheadSec = -1
+
 function renderGlobalTimeline() {
   const section = document.getElementById('global-timeline-section')!
   const hasParticipants = scene.some(p => p.participants.length > 0)
@@ -1301,6 +1304,25 @@ function renderGlobalTimeline() {
       ctx.fillRect(x - 1, midY - 4, 2, 8)
     }
   })
+
+  // ---- Recording playhead ----
+  if (timelinePlayheadSec >= 0 && totalSec > 0) {
+    const phX = leftPad + Math.min(1, timelinePlayheadSec / totalSec) * plotW
+    ctx.strokeStyle = '#ef4444'
+    ctx.lineWidth = 1.5
+    ctx.beginPath()
+    ctx.moveTo(phX, topPad - 2)
+    ctx.lineTo(phX, H - bottomPad + 2)
+    ctx.stroke()
+    // Small triangle at top
+    ctx.fillStyle = '#ef4444'
+    ctx.beginPath()
+    ctx.moveTo(phX - 3, topPad - 2)
+    ctx.lineTo(phX + 3, topPad - 2)
+    ctx.lineTo(phX, topPad + 2)
+    ctx.closePath()
+    ctx.fill()
+  }
 
   // Legend
   const legendContainer = document.getElementById('timeline-legend')!
@@ -1525,38 +1547,20 @@ let videoCancelled = false
 
 interface CompositeFrameSpec {
   globalTimeSec: number
-  displayDurationSec: number
   positions: Array<{ pathConfig: PathConfig; t: number }>
 }
 
-function computeCompositeFrameSpecs(targetDurationSec: number): CompositeFrameSpec[] | { error: string } {
+function computeCompositeFrameSpecs(): CompositeFrameSpec[] | { error: string } {
   const timeline = computeGlobalTimeline()
   if (timeline.events.length === 0) return { error: 'No participants in scene' }
-  if (targetDurationSec <= 0) return { error: 'Duration must be positive' }
-
-  const realDuration = timeline.totalDurationSec
-  if (realDuration <= 0) return { error: 'Scene has zero duration' }
-
-  const playbackSpeed = realDuration / targetDurationSec
 
   // Collect unique global timestamps (deduplicated)
   const timestamps = [...new Set(timeline.events.map(e => e.globalTimeSec))].sort((a, b) => a - b)
 
-  const frames: CompositeFrameSpec[] = []
-
-  for (let i = 0; i < timestamps.length; i++) {
-    const globalTime = timestamps[i]
-    const prevTime = i === 0 ? 0 : timestamps[i - 1]
-    const realInterval = globalTime - prevTime
-
-    frames.push({
-      globalTimeSec: globalTime,
-      displayDurationSec: realInterval / playbackSpeed,
-      positions: resolvePositionsAtGlobalTime(globalTime),
-    })
-  }
-
-  return frames
+  return timestamps.map(globalTime => ({
+    globalTimeSec: globalTime,
+    positions: resolvePositionsAtGlobalTime(globalTime),
+  }))
 }
 
 function updateVideoUI() {
@@ -1570,23 +1574,31 @@ function updateVideoUI() {
 
 function onVideoSettingsChange() {
   const dur = parseFloat((document.getElementById('vid-duration') as HTMLInputElement).value) || 10
-  const specs = computeCompositeFrameSpecs(dur)
+  const specs = computeCompositeFrameSpecs()
 
   const countEl = document.getElementById('vid-frame-count')!
   const activeEl = document.getElementById('vid-active-paths')!
   const realDurEl = document.getElementById('vid-real-duration')!
+  const fpsEl = document.getElementById('vid-fps')!
+  const captureEstEl = document.getElementById('vid-capture-est')!
 
   if ('error' in specs) {
     countEl.textContent = '—'
     activeEl.textContent = specs.error
     realDurEl.textContent = '—'
+    fpsEl.textContent = '—'
+    captureEstEl.textContent = '—'
     return
   }
 
   const timeline = computeGlobalTimeline()
+  const fps = specs.length / dur
+
   countEl.textContent = `${specs.length}`
   activeEl.textContent = `${timeline.pathCount}`
   realDurEl.textContent = formatDuration(timeline.totalDurationSec)
+  fpsEl.textContent = `${fps.toFixed(1)} fps`
+  captureEstEl.textContent = `~${formatDuration(specs.length * 0.6)}`
 }
 
 function buildShapeForPath(config: PathConfig, ev: PathEvalResult): BaseShape {
@@ -1678,10 +1690,13 @@ async function recordVideo() {
 
   onVideoSettingsChange()
 
-  const dur = parseFloat((document.getElementById('vid-duration') as HTMLInputElement).value) || 10
-  const specs = computeCompositeFrameSpecs(dur)
+  const targetDuration = parseFloat((document.getElementById('vid-duration') as HTMLInputElement).value) || 10
+  const specs = computeCompositeFrameSpecs()
   if ('error' in specs) { setStatus(`Error: ${specs.error}`); return }
   if (specs.length === 0) { setStatus('No frames to record'); return }
+
+  const targetFps = specs.length / targetDuration
+  const frameDurationMs = 1000 / targetFps
 
   videoRecording = true
   videoCancelled = false
@@ -1702,58 +1717,36 @@ async function recordVideo() {
   downloadBtn.style.display = 'none'
   progressWrap.style.display = 'block'
   progressBar.style.width = '0%'
-  progressText.textContent = 'Preparing…'
+  progressText.textContent = 'Phase 1: Capturing frames…'
   progressPct.textContent = '0%'
 
-  const stream = canvas.captureStream(0)
-
-  let mimeType = 'video/webm;codecs=vp9'
-  if (!MediaRecorder.isTypeSupported(mimeType)) {
-    mimeType = 'video/webm;codecs=vp8'
-    if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/webm'
-  }
-
-  const mediaRecorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 4_000_000 })
-  const chunks: Blob[] = []
-  mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data) }
-
-  mediaRecorder.onstop = () => {
-    if (!videoCancelled && chunks.length > 0) {
-      videoBlob = new Blob(chunks, { type: 'video/webm' })
-      downloadBtn.style.display = 'block'
-      progressText.textContent = `Done — ${specs.length} frames, ${(videoBlob.size / 1024).toFixed(0)} KB`
-      setStatus('Video recorded successfully')
-      client.notify('Video recording complete', 'success')
-    } else {
-      progressText.textContent = 'Cancelled'
-    }
-    videoRecording = false
-    cancelBtn.style.display = 'none'
-    recordBtn.style.display = 'block'
-    recordBtn.style.flex = '1'
-  }
-
-  mediaRecorder.start()
+  // =========================================================================
+  // PHASE 1: Capture all frames as image data URLs (slow — host rendering)
+  // =========================================================================
+  const capturedFrames: Array<{ dataUrl: string; globalTimeSec: number }> = []
 
   try {
-    // Initial refresh of all path coordinates
     await refreshAllDisplayPoints()
 
     for (let i = 0; i < specs.length; i++) {
       if (videoCancelled) break
 
       const frame = specs[i]
-      const pct = ((i + 1) / specs.length * 100).toFixed(0)
+      const pct = ((i + 1) / specs.length * 50).toFixed(0) // Phase 1 = 0-50%
       progressBar.style.width = `${pct}%`
       progressPct.textContent = `${pct}%`
-      progressText.textContent = `Frame ${i + 1}/${specs.length} (${frame.positions.length} vehicles)…`
+      progressText.textContent = `Capturing ${i + 1}/${specs.length} (${frame.positions.length} vehicles)…`
+
+      // Update timeline playhead
+      timelinePlayheadSec = frame.globalTimeSec
+      renderGlobalTimeline()
 
       // 1. Clear all placed shapes
       await clearAllPlacedShapes()
       if (videoCancelled) break
       await new Promise(r => setTimeout(r, 80))
 
-      // 2. Re-fetch all path coordinates (guards against canvas pan/zoom)
+      // 2. Re-fetch path coordinates
       await refreshAllDisplayPoints()
       if (videoCancelled) break
 
@@ -1780,12 +1773,72 @@ async function recordVideo() {
         continue
       }
 
-      // 6. Remove temp shapes
+      // 6. Clean up temp shapes
       client.deleteShapes(tempShapeIds)
 
-      // 7. Draw to canvas
+      capturedFrames.push({ dataUrl, globalTimeSec: frame.globalTimeSec })
+    }
+  } catch (e) {
+    console.error('[FootprintLab] Capture phase error:', e)
+  }
+
+  // Restore scene
+  progressText.textContent = 'Restoring scene…'
+  timelinePlayheadSec = -1
+  renderGlobalTimeline()
+  try {
+    for (const config of scene) {
+      if (config.participants.length > 0) await placePathParticipants(config)
+    }
+  } catch {}
+
+  if (videoCancelled || capturedFrames.length === 0) {
+    progressText.textContent = videoCancelled ? 'Cancelled' : 'No frames captured'
+    videoRecording = false
+    cancelBtn.style.display = 'none'
+    recordBtn.style.display = 'block'
+    recordBtn.style.flex = '1'
+    return
+  }
+
+  // =========================================================================
+  // PHASE 2: Encode cached frames to video at target FPS (fast)
+  // =========================================================================
+  progressText.textContent = `Phase 2: Encoding ${capturedFrames.length} frames at ${targetFps.toFixed(1)} fps…`
+
+  const stream = canvas.captureStream(0) // manual frame control
+
+  let mimeType = 'video/webm;codecs=vp9'
+  if (!MediaRecorder.isTypeSupported(mimeType)) {
+    mimeType = 'video/webm;codecs=vp8'
+    if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/webm'
+  }
+
+  const mediaRecorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 4_000_000 })
+  const chunks: Blob[] = []
+  mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data) }
+
+  const encodingDone = new Promise<void>(resolve => {
+    mediaRecorder.onstop = () => resolve()
+  })
+
+  mediaRecorder.start()
+
+  try {
+    for (let i = 0; i < capturedFrames.length; i++) {
+      if (videoCancelled) break
+
+      const pct = (50 + ((i + 1) / capturedFrames.length * 50)).toFixed(0) // Phase 2 = 50-100%
+      progressBar.style.width = `${pct}%`
+      progressPct.textContent = `${pct}%`
+
+      // Update timeline playhead during encoding
+      timelinePlayheadSec = capturedFrames[i].globalTimeSec
+      renderGlobalTimeline()
+
+      // Draw cached image to canvas
       try {
-        const img = await loadImage(dataUrl)
+        const img = await loadImage(capturedFrames[i].dataUrl)
         const imgAspect = img.width / img.height
         const canvasAspect = canvas.width / canvas.height
         let drawW = canvas.width, drawH = canvas.height, drawX = 0, drawY = 0
@@ -1800,30 +1853,44 @@ async function recordVideo() {
         ctx.fillRect(0, 0, canvas.width, canvas.height)
         ctx.drawImage(img, drawX, drawY, drawW, drawH)
       } catch (e) {
-        console.warn(`[FootprintLab] Frame ${i + 1} draw failed:`, e)
+        console.warn(`[FootprintLab] Encode frame ${i + 1} draw failed:`, e)
         continue
       }
 
-      // 8. Capture canvas frame
+      // Push frame to encoder
       const track = stream.getVideoTracks()[0] as any
       if (track.requestFrame) track.requestFrame()
 
-      // 9. Hold for correct duration
-      const holdMs = Math.max(33, frame.displayDurationSec * 1000)
-      await new Promise(r => setTimeout(r, holdMs))
+      // Hold for exactly the target frame duration
+      await new Promise(r => setTimeout(r, frameDurationMs))
     }
 
-    if (!videoCancelled) await new Promise(r => setTimeout(r, 500))
+    // Hold last frame briefly for encoder flush
+    await new Promise(r => setTimeout(r, Math.max(100, frameDurationMs)))
   } finally {
     mediaRecorder.stop()
-    progressText.textContent = 'Restoring scene…'
-    // Restore all paths' placed shapes
-    try {
-      for (const config of scene) {
-        if (config.participants.length > 0) await placePathParticipants(config)
-      }
-    } catch {}
   }
+
+  await encodingDone
+
+  // Clear playhead
+  timelinePlayheadSec = -1
+  renderGlobalTimeline()
+
+  if (!videoCancelled && chunks.length > 0) {
+    videoBlob = new Blob(chunks, { type: 'video/webm' })
+    downloadBtn.style.display = 'block'
+    progressText.textContent = `Done — ${capturedFrames.length} frames, ${targetFps.toFixed(1)} fps, ${(videoBlob.size / 1024).toFixed(0)} KB`
+    setStatus('Video recorded successfully')
+    client.notify('Video recording complete', 'success')
+  } else {
+    progressText.textContent = 'Cancelled'
+  }
+
+  videoRecording = false
+  cancelBtn.style.display = 'none'
+  recordBtn.style.display = 'block'
+  recordBtn.style.flex = '1'
 }
 
 function cancelRecording() { videoCancelled = true }
