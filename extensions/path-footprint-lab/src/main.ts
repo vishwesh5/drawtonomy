@@ -1,7 +1,17 @@
-// Path Footprint Lab - Development extension for variable footprint positioning
-// Segment-based simulation: piecewise speed profiles with per-segment sampling
+// Path Footprint Lab — Multi-path scene orchestration
+//
+// Architecture: Scene model
+//   Scene owns an ordered list of PathConfig entries.
+//   Each PathConfig stores segments, temporal start offset, template, cached
+//   display points, and computed participants (local t-values + local timestamps).
+//   A GlobalTimeline merges all paths' participants by adding startOffsetSec,
+//   producing a single sorted event list used for visualization and video recording.
+//
+// JSON import/export serializes the full scene (minus cached geometry).
 
-// --- Inline ExtensionClient ---
+// =============================================================================
+// INLINE EXTENSION CLIENT
+// =============================================================================
 
 interface InitPayload {
   hostVersion: string
@@ -84,7 +94,10 @@ class ExtensionClient {
   }
 }
 
-// --- Inline geometry ---
+
+// =============================================================================
+// GEOMETRY
+// =============================================================================
 
 interface Point2D { x: number; y: number }
 interface PathEvalResult { position: Point2D; tangentAngleDeg: number; tangentVec: Point2D }
@@ -99,6 +112,11 @@ function computeArcLengths(points: Point2D[]): number[] {
     lengths[i] = lengths[i - 1] + Math.sqrt(dx * dx + dy * dy)
   }
   return lengths
+}
+
+function totalArcLength(points: Point2D[]): number {
+  const arcs = computeArcLengths(points)
+  return arcs.length > 0 ? arcs[arcs.length - 1] : 0
 }
 
 function evaluatePathAt(points: Point2D[], t: number): PathEvalResult {
@@ -127,41 +145,41 @@ function evaluatePathAt(points: Point2D[], t: number): PathEvalResult {
 // =============================================================================
 // SIMULATION ENGINE — Segment-based piecewise speed profiles
 // =============================================================================
-//
-// Each segment defines a constant-speed phase:
-//   { speed, speedUnit, duration, durationUnit, samplingRate, samplingRateUnit }
-//
-// Pipeline (per segment, then concatenated):
-//   1. Resolve N_i samples and time window [T_start, T_end] for segment i
-//   2. Generate sample timestamps within the window
-//   3. Compute cumulative distance at each timestamp:
-//        dist(t) = prior_segments_distance + speed_i × (t - T_start_i)
-//   4. Normalize all distances by total distance → path t-values [0, 1]
-//
-// This naturally produces non-uniform spacing when segments have different speeds.
-// =============================================================================
 
-type SpeedUnit = 'km/h' | 'm/s' | 'mph'
+type SpeedUnit = 'cu/s' | 'km/h' | 'm/s' | 'mph'
 type TimeUnit = 's' | 'min' | 'hr'
-type SamplingRateUnit = 'total' | '/s' | '/min' | '/hr'
+
+type SegmentMode = 'time' | 'percent'
 
 interface SpeedSegment {
+  mode: SegmentMode
   speed: number
   speedUnit: SpeedUnit
-  duration: number
-  durationUnit: TimeUnit
-  samplingRate: number
-  samplingRateUnit: SamplingRateUnit
+  // Time mode fields
+  duration?: number
+  durationUnit?: TimeUnit
+  // Percent mode fields
+  pathPercent?: number   // 0-100, percentage of path length this segment covers
 }
 
-// --- Unit conversions ---
-
-function speedToMs(value: number, unit: SpeedUnit): number {
+/**
+ * Converts speed to "working units per second".
+ * When scale is set (metersPerCanvasUnit > 0), working unit = meters.
+ * When no scale, working unit = canvas units — only cu/s is valid.
+ * cu/s is always accepted: when scale is set, it's converted to m/s via scale.
+ */
+function speedToWorkingUnits(value: number, unit: SpeedUnit): number {
   switch (unit) {
+    case 'cu/s': return metersPerCanvasUnit > 0 ? value * metersPerCanvasUnit : value
     case 'km/h': return value / 3.6
     case 'm/s':  return value
     case 'mph':  return value * 0.44704
   }
+}
+
+/** Returns true if the unit requires a scale to be set */
+function unitRequiresScale(unit: SpeedUnit): boolean {
+  return unit !== 'cu/s'
 }
 
 function timeToSeconds(value: number, unit: TimeUnit): number {
@@ -172,17 +190,6 @@ function timeToSeconds(value: number, unit: TimeUnit): number {
   }
 }
 
-function resolveCount(rate: number, rateUnit: SamplingRateUnit, durationSec: number): number {
-  switch (rateUnit) {
-    case 'total': return Math.max(1, Math.round(rate))
-    case '/s':    return Math.max(1, Math.round(rate * durationSec))
-    case '/min':  return Math.max(1, Math.round(rate * (durationSec / 60)))
-    case '/hr':   return Math.max(1, Math.round(rate * (durationSec / 3600)))
-  }
-}
-
-// --- Display formatting ---
-
 function formatDuration(seconds: number): string {
   if (seconds < 1) return `${(seconds * 1000).toFixed(0)} ms`
   if (seconds < 60) return `${seconds.toFixed(1)} s`
@@ -190,139 +197,228 @@ function formatDuration(seconds: number): string {
   return `${(seconds / 3600).toFixed(2)} hr`
 }
 
-function formatDistance(meters: number): string {
-  if (meters < 1) return `${(meters * 100).toFixed(1)} cm`
-  if (meters < 1000) return `${meters.toFixed(1)} m`
-  return `${(meters / 1000).toFixed(2)} km`
+/** Format distance in working units — scale-aware */
+function formatDistance(value: number): string {
+  if (metersPerCanvasUnit > 0) {
+    // Real-world units
+    if (value < 1) return `${(value * 100).toFixed(1)} cm`
+    if (value < 1000) return `${value.toFixed(1)} m`
+    return `${(value / 1000).toFixed(2)} km`
+  } else {
+    // Canvas units
+    return `${value.toFixed(1)} cu`
+  }
 }
 
-function formatSpeed(speedMs: number): string {
-  const kmh = speedMs * 3.6
-  if (kmh < 1) return `${speedMs.toFixed(2)} m/s`
-  return `${kmh.toFixed(1)} km/h`
+/** Format speed in working units — scale-aware */
+function formatSpeed(value: number): string {
+  if (metersPerCanvasUnit > 0) {
+    const kmh = value * 3.6
+    if (kmh < 1) return `${value.toFixed(2)} m/s`
+    return `${kmh.toFixed(1)} km/h`
+  } else {
+    return `${value.toFixed(1)} cu/s`
+  }
 }
-
-// --- Pipeline ---
 
 interface SegmentComputed {
-  speedMs: number
-  durationSec: number
-  numSamples: number
-  distanceM: number
-  intervalSec: number
-  timeStartSec: number   // absolute start time
+  speedMs: number; durationSec: number
+  distanceM: number; timeStartSec: number
+  cumulativeDistM: number   // cumulative distance at end of this segment
+  coveragePct: number       // cumulative path coverage at end of this segment (0-100)
 }
 
 interface SimulationResult {
   tValues: number[]
+  localTimestamps: number[]  // absolute local time for each participant
   totalParticipants: number
   totalDurationSec: number
   totalDistanceM: number
+  pathCoverage: number       // 0-100, how much of the path is covered
   segmentsComputed: SegmentComputed[]
 }
 
-function runSegmentPipeline(segments: SpeedSegment[]): SimulationResult | { error: string } {
-  if (segments.length === 0) return { error: 'Add at least one segment' }
+/**
+ * Resolves a segment's distance and duration from its mode.
+ * Time mode: distance = speed × time
+ * Percent mode: distance = (pct/100) × pathLength, time = distance / speed
+ * All in working units (meters when scale set, canvas units when not).
+ */
+function resolveSegment(seg: SpeedSegment, pathLength: number): { distanceM: number; durationSec: number; speedMs: number } | { error: string } {
+  if (unitRequiresScale(seg.speedUnit) && metersPerCanvasUnit <= 0) {
+    return { error: `unit "${seg.speedUnit}" requires canvas scale to be set` }
+  }
+  const speedMs = speedToWorkingUnits(seg.speed, seg.speedUnit)
+  if (speedMs <= 0) return { error: 'speed must be positive' }
 
-  // 1. Pre-compute each segment's resolved values
+  if (seg.mode === 'percent') {
+    const pct = seg.pathPercent ?? 0
+    if (pct <= 0 || pct > 100) return { error: 'path % must be between 0 and 100' }
+    const distanceM = (pct / 100) * pathLength
+    const durationSec = distanceM / speedMs
+    return { distanceM, durationSec, speedMs }
+  } else {
+    const durationSec = timeToSeconds(seg.duration ?? 0, seg.durationUnit ?? 's')
+    if (durationSec <= 0) return { error: 'duration must be positive' }
+    const distanceM = speedMs * durationSec
+    return { distanceM, durationSec, speedMs }
+  }
+}
+
+/**
+ * Piecewise speed profile → uniformly sampled positions.
+ *
+ * Segments define speed × (time | path%). Sampling is global via samplesPerSec.
+ * Distances are normalized by pathLength, so t-values represent actual
+ * position on the physical path. Coverage ≤ 100% is enforced.
+ *
+ * Pipeline:
+ *   1. Resolve each segment's speed, duration, distance (handling both modes)
+ *   2. Validate cumulative distance ≤ pathLength
+ *   3. totalSamples = ceil(samplesPerSec × totalDuration)
+ *   4. Generate uniform timestamps, walk piecewise profile for cumulative distance
+ *   5. Normalize by pathLength → path t-value [0, 1]
+ */
+function runSegmentPipeline(segments: SpeedSegment[], samplesPerSec: number, pathLength: number): SimulationResult | { error: string } {
+  if (segments.length === 0) return { error: 'Add at least one segment' }
+  if (samplesPerSec <= 0) return { error: 'Sampling rate must be positive' }
+  if (pathLength <= 0) return { error: 'Path has zero length' }
+
   const computed: SegmentComputed[] = []
   let cumulativeTime = 0
-  let totalParticipants = 0
+  let cumulativeDistance = 0
 
   for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i]
-    const speedMs = speedToMs(seg.speed, seg.speedUnit)
-    const durationSec = timeToSeconds(seg.duration, seg.durationUnit)
-    const numSamples = resolveCount(seg.samplingRate, seg.samplingRateUnit, durationSec)
+    const resolved = resolveSegment(segments[i], pathLength)
+    if ('error' in resolved) return { error: `Segment ${i + 1}: ${resolved.error}` }
 
-    if (speedMs <= 0) return { error: `Segment ${i + 1}: speed must be positive` }
-    if (durationSec <= 0) return { error: `Segment ${i + 1}: duration must be positive` }
+    cumulativeDistance += resolved.distanceM
+    const coveragePct = (cumulativeDistance / pathLength) * 100
 
-    const distanceM = speedMs * durationSec
-    const intervalSec = durationSec / numSamples
+    if (coveragePct > 100.01) {
+      const excess = cumulativeDistance - pathLength
+      return { error: `Segment ${i + 1} exceeds path by ${formatDistance(excess)} (${coveragePct.toFixed(1)}% > 100%). Remove or shorten this segment.` }
+    }
 
     computed.push({
-      speedMs,
-      durationSec,
-      numSamples,
-      distanceM,
-      intervalSec,
+      speedMs: resolved.speedMs,
+      durationSec: resolved.durationSec,
+      distanceM: resolved.distanceM,
       timeStartSec: cumulativeTime,
+      cumulativeDistM: cumulativeDistance,
+      coveragePct: Math.min(100, coveragePct),
     })
-
-    cumulativeTime += durationSec
-    totalParticipants += numSamples
+    cumulativeTime += resolved.durationSec
   }
-
-  if (totalParticipants > 200) return { error: `Too many participants (${totalParticipants}). Max 200.` }
 
   const totalDurationSec = cumulativeTime
-  const totalDistanceM = computed.reduce((sum, c) => sum + c.distanceM, 0)
+  const totalDistanceM = cumulativeDistance
+  const pathCoverage = Math.min(100, (totalDistanceM / pathLength) * 100)
 
-  if (totalDistanceM <= 0) return { error: 'Total distance is zero' }
+  const totalSamples = Math.max(1, Math.ceil(samplesPerSec * totalDurationSec))
+  if (totalSamples > 2000) return { error: `Too many samples (${totalSamples}). Reduce rate or duration. Max 2000.` }
 
-  // 2. Generate sample timestamps and compute cumulative distances
+  const interval = totalDurationSec / totalSamples
+  const localTimestamps: number[] = []
   const allDistances: number[] = []
-  let priorDistance = 0
 
-  for (const seg of computed) {
-    for (let j = 1; j <= seg.numSamples; j++) {
-      // Time within this segment: j * interval (excludes seg start, includes seg end)
-      const dt = j * seg.intervalSec
-      const cumulDist = priorDistance + seg.speedMs * dt
-      allDistances.push(cumulDist)
+  for (let i = 0; i < totalSamples; i++) {
+    const timestamp = (i + 1) * interval
+    localTimestamps.push(timestamp)
+
+    // Walk piecewise segments to compute cumulative distance at this timestamp
+    let cumulDist = 0
+    let timeRemaining = timestamp
+
+    for (const seg of computed) {
+      if (timeRemaining <= 0) break
+      const dtInSeg = Math.min(timeRemaining, seg.durationSec)
+      cumulDist += seg.speedMs * dtInSeg
+      timeRemaining -= seg.durationSec
     }
-    priorDistance += seg.distanceM
+
+    allDistances.push(cumulDist)
   }
 
-  // 3. Normalize to t ∈ [0, 1]
-  const tValues = allDistances.map(d => Math.min(1, d / totalDistanceM))
+  // Normalize by pathLength — t represents actual position on the physical path
+  const tValues = allDistances.map(d => Math.min(1, d / pathLength))
 
-  return {
-    tValues,
-    totalParticipants,
-    totalDurationSec,
-    totalDistanceM,
-    segmentsComputed: computed,
-  }
+  return { tValues, localTimestamps, totalParticipants: totalSamples, totalDurationSec, totalDistanceM, pathCoverage, segmentsComputed: computed }
 }
 
 
 // =============================================================================
-// STATE
+// SCENE DATA MODEL
 // =============================================================================
 
-let idCounter = 0
-function nextId(prefix = 'fplab'): string { return `${prefix}_${++idCounter}_${Date.now().toString(36)}` }
+const PATH_COLORS = [
+  '#4f46e5', '#ea580c', '#16a34a', '#dc2626',
+  '#8b5cf6', '#0891b2', '#d97706', '#be185d',
+  '#0d9488', '#4338ca', '#c2410c', '#15803d',
+]
 
-let client: ExtensionClient
-let selectedPathId: string | null = null
-let selectedPathPoints: Point2D[] = []
-let footprints: Array<{ t: number }> = []
+interface LocalParticipant {
+  t: number            // path-local parametric value [0, 1]
+  localTimeSec: number // seconds from this path's own t=0
+}
 
-let activeMode: 'manual' | 'simulation' = 'manual'
-
-// Segment list for simulation mode
-let segments: SpeedSegment[] = []
-
-// Per-path state persistence
-interface PathState {
-  footprints: Array<{ t: number }>
+interface PathConfig {
+  pathId: string
+  label: string
+  color: string
+  startOffsetSec: number
   templateId: string
+  segments: SpeedSegment[]
+  displayPoints: Point2D[]       // cached from host
+  participants: LocalParticipant[]
   placedShapeIds: string[]
   isPlaced: boolean
-  needsUpdate: boolean
-  activeMode: 'manual' | 'simulation'
-  segments: SpeedSegment[]
+  localDurationSec: number       // total duration of this path's speed profile
 }
-const pathStateMap = new Map<string, PathState>()
 
-// UI state tracking
-let isPlaced = false
-let needsUpdate = false
-let placedShapeIds: string[] = []
+interface GlobalParticipant {
+  pathId: string
+  pathColor: string
+  pathLabel: string
+  localT: number
+  globalTimeSec: number
+}
 
-// Template definitions
+interface GlobalTimeline {
+  events: GlobalParticipant[]    // sorted by globalTimeSec
+  totalDurationSec: number       // max global end time across all paths
+  pathCount: number
+}
+
+// The scene
+let scene: PathConfig[] = []
+let activePathId: string | null = null
+let colorIndex = 0
+let globalSamplingRate = 1.0 // samples per second — applies uniformly to all paths
+let metersPerCanvasUnit = 0   // 0 = no scale (work in canvas units), >0 = real-world mode
+
+function hasScale(): boolean { return metersPerCanvasUnit > 0 }
+
+/**
+ * Returns the path length in working units.
+ * When scale is set: meters. When not: canvas units.
+ */
+function getPathLength(config: PathConfig): number {
+  const arcLen = totalArcLength(config.displayPoints)
+  return hasScale() ? arcLen * metersPerCanvasUnit : arcLen
+}
+
+function nextColor(): string {
+  const c = PATH_COLORS[colorIndex % PATH_COLORS.length]
+  colorIndex++
+  return c
+}
+
+
+// =============================================================================
+// TEMPLATES
+// =============================================================================
+
 const TEMPLATES = [
   { id: 'sedan', name: 'Sedan', w: 30, h: 56, type: 'vehicle' as const, svg: '/templates/vehicle/sedan.svg', vbW: 25, vbH: 47 },
   { id: 'bus', name: 'Bus', w: 37, h: 92, type: 'vehicle' as const, svg: '/templates/vehicle/bus.svg', vbW: 341, vbH: 850 },
@@ -335,229 +431,130 @@ const TEMPLATES = [
   { id: 'walk', name: 'Walk', w: 22, h: 22, type: 'pedestrian' as const, svg: '/templates/pedestrian/pedestrian_walk.svg', vbW: 220, vbH: 220 },
   { id: 'simple', name: 'Simple', w: 22, h: 22, type: 'pedestrian' as const, svg: '/templates/pedestrian/pedestrian_simple.svg', vbW: 210, vbH: 210 },
 ]
-let selectedTemplate = TEMPLATES[0]
+
+function templateById(id: string) { return TEMPLATES.find(t => t.id === id) ?? TEMPLATES[0] }
 
 
 // =============================================================================
-// UI STATE MANAGEMENT
+// SCENE MANAGEMENT
 // =============================================================================
 
-function showPanel(hasPath: boolean) {
-  document.getElementById('no-path-state')!.style.display = hasPath ? 'none' : 'flex'
-  document.getElementById('path-panel')!.style.display = hasPath ? 'block' : 'none'
+function getPathConfig(pathId: string): PathConfig | undefined {
+  return scene.find(p => p.pathId === pathId)
 }
 
-function updateUIState() {
-  const btnPlace = document.getElementById('btn-place')!
-  const updateBanner = document.getElementById('update-banner')!
-  const liveIndicator = document.getElementById('live-indicator')!
-  const btnRemoveLast = document.getElementById('btn-remove-last')!
-  const participantCount = document.getElementById('participant-count')!
-
-  participantCount.textContent = String(footprints.length)
-  btnRemoveLast.style.display = footprints.length > 0 ? 'inline-block' : 'none'
-
-  if (footprints.length === 0) {
-    btnPlace.style.display = 'none'
-    updateBanner.style.display = 'none'
-    liveIndicator.style.display = 'none'
-  } else if (!isPlaced) {
-    btnPlace.style.display = 'block'
-    updateBanner.style.display = 'none'
-    liveIndicator.style.display = 'none'
-  } else if (needsUpdate) {
-    btnPlace.style.display = 'none'
-    updateBanner.style.display = 'block'
-    liveIndicator.style.display = 'none'
-  } else {
-    btnPlace.style.display = 'none'
-    updateBanner.style.display = 'none'
-    liveIndicator.style.display = 'block'
+function addPathToScene(pathId: string, displayPoints: Point2D[], label?: string): PathConfig {
+  const existing = getPathConfig(pathId)
+  if (existing) {
+    existing.displayPoints = displayPoints
+    return existing
   }
-
-  // Update video section visibility
-  updateVideoUI()
+  const config: PathConfig = {
+    pathId,
+    label: label ?? `Path ${scene.length + 1}`,
+    color: nextColor(),
+    startOffsetSec: 0,
+    templateId: 'sedan',
+    segments: [],
+    displayPoints,
+    participants: [],
+    placedShapeIds: [],
+    isPlaced: false,
+    localDurationSec: 0,
+  }
+  scene.push(config)
+  return config
 }
 
-function switchMode(mode: 'manual' | 'simulation') {
-  activeMode = mode
-  document.querySelectorAll('.mode-tab').forEach(tab => {
-    tab.classList.toggle('active', (tab as HTMLElement).dataset.mode === mode)
-  })
-  document.getElementById('mode-manual')!.classList.toggle('active', mode === 'manual')
-  document.getElementById('mode-simulation')!.classList.toggle('active', mode === 'simulation')
-  if (mode === 'simulation') {
-    renderSegmentList()
-    updateTotals()
+function removePathFromScene(pathId: string) {
+  const idx = scene.findIndex(p => p.pathId === pathId)
+  if (idx < 0) return
+  // Clean up placed shapes
+  const config = scene[idx]
+  if (config.placedShapeIds.length > 0) {
+    client.deleteShapes(config.placedShapeIds)
   }
-  saveCurrentPathState()
+  scene.splice(idx, 1)
+  if (activePathId === pathId) {
+    activePathId = scene.length > 0 ? scene[0].pathId : null
+  }
+}
+
+function setActivePath(pathId: string | null) {
+  activePathId = pathId
+  renderAll()
 }
 
 
 // =============================================================================
-// SEGMENT LIST UI
+// GLOBAL TIMELINE COMPUTATION
 // =============================================================================
 
-function renderSegmentList() {
-  const container = document.getElementById('seg-list')!
-  container.innerHTML = ''
+function computeGlobalTimeline(): GlobalTimeline {
+  const events: GlobalParticipant[] = []
+  let maxEnd = 0
 
-  if (segments.length === 0) {
-    container.innerHTML = '<div class="seg-empty">No segments yet</div>'
-    return
+  for (const pc of scene) {
+    if (pc.participants.length === 0) continue
+    const pathEnd = pc.startOffsetSec + pc.localDurationSec
+    if (pathEnd > maxEnd) maxEnd = pathEnd
+
+    for (const lp of pc.participants) {
+      events.push({
+        pathId: pc.pathId,
+        pathColor: pc.color,
+        pathLabel: pc.label,
+        localT: lp.t,
+        globalTimeSec: pc.startOffsetSec + lp.localTimeSec,
+      })
+    }
   }
 
-  segments.forEach((seg, i) => {
-    const speedMs = speedToMs(seg.speed, seg.speedUnit)
-    const durSec = timeToSeconds(seg.duration, seg.durationUnit)
-    const count = resolveCount(seg.samplingRate, seg.samplingRateUnit, durSec)
-    const dist = speedMs * durSec
+  events.sort((a, b) => a.globalTimeSec - b.globalTimeSec)
+  const pathsWithParticipants = new Set(events.map(e => e.pathId)).size
 
-    const card = document.createElement('div')
-    card.className = 'seg-card'
-    card.innerHTML = `
-      <span class="seg-num">${i + 1}</span>
-      <div class="seg-info">
-        <div class="seg-main">${seg.speed} ${seg.speedUnit} × ${seg.duration} ${seg.durationUnit}</div>
-        <div class="seg-detail">${count} pts · ${formatDistance(dist)} · ${formatDuration(durSec / count)} interval</div>
-      </div>
-      <button class="seg-remove" data-index="${i}">&times;</button>
-    `
-
-    card.querySelector('.seg-remove')!.addEventListener('click', () => {
-      segments.splice(i, 1)
-      renderSegmentList()
-      updateTotals()
-      saveCurrentPathState()
-    })
-
-    container.appendChild(card)
-  })
+  return { events, totalDurationSec: maxEnd, pathCount: pathsWithParticipants }
 }
 
-function updateTotals() {
-  const totalsEl = document.getElementById('sim-totals')!
-  const generateBtn = document.getElementById('btn-generate') as HTMLButtonElement
+/**
+ * For a given global time, compute each active path's interpolated t-value.
+ * Uses step interpolation: finds the last participant at or before globalTime.
+ * Returns one entry per active path.
+ */
+function resolvePositionsAtGlobalTime(globalTimeSec: number): Array<{ pathConfig: PathConfig; t: number }> {
+  const results: Array<{ pathConfig: PathConfig; t: number }> = []
 
-  if (segments.length === 0) {
-    totalsEl.className = 'sim-totals empty'
-    totalsEl.innerHTML = '<div style="text-align:center;">Add segments to build a speed profile</div>'
-    generateBtn.disabled = true
-    return
+  for (const pc of scene) {
+    if (pc.participants.length === 0) continue
+    const localTime = globalTimeSec - pc.startOffsetSec
+    if (localTime < 0) continue // path hasn't started yet
+    if (localTime > pc.localDurationSec + 0.001) continue // path finished
+
+    // Find the participant with the largest localTimeSec <= localTime
+    let bestT = pc.participants[0].t
+    for (const lp of pc.participants) {
+      if (lp.localTimeSec <= localTime + 0.001) bestT = lp.t
+      else break // participants are sorted by time
+    }
+    results.push({ pathConfig: pc, t: bestT })
   }
 
-  const result = runSegmentPipeline(segments)
-
-  if ('error' in result) {
-    totalsEl.className = 'sim-totals empty'
-    totalsEl.innerHTML = `<div style="text-align:center;color:#991b1b;">${result.error}</div>`
-    generateBtn.disabled = true
-    return
-  }
-
-  generateBtn.disabled = false
-  totalsEl.className = 'sim-totals'
-  totalsEl.innerHTML = `
-    <div class="totals-line"><span>Total participants</span><span class="totals-value">${result.totalParticipants}</span></div>
-    <div class="totals-line"><span>Total duration</span><span class="totals-value">${formatDuration(result.totalDurationSec)}</span></div>
-    <div class="totals-line"><span>Total distance</span><span class="totals-value">${formatDistance(result.totalDistanceM)}</span></div>
-    <div class="totals-line"><span>Segments</span><span class="totals-value">${segments.length}</span></div>
-  `
-}
-
-function addSegment() {
-  const speed = parseFloat((document.getElementById('seg-speed') as HTMLInputElement).value) || 0
-  const speedUnit = (document.getElementById('seg-speed-unit') as HTMLSelectElement).value as SpeedUnit
-  const duration = parseFloat((document.getElementById('seg-time') as HTMLInputElement).value) || 0
-  const durationUnit = (document.getElementById('seg-time-unit') as HTMLSelectElement).value as TimeUnit
-  const samplingRate = parseFloat((document.getElementById('seg-rate') as HTMLInputElement).value) || 0
-  const samplingRateUnit = (document.getElementById('seg-rate-unit') as HTMLSelectElement).value as SamplingRateUnit
-
-  if (speed <= 0 || duration <= 0 || samplingRate <= 0) {
-    setStatus('All segment values must be positive')
-    return
-  }
-
-  segments.push({ speed, speedUnit, duration, durationUnit, samplingRate, samplingRateUnit })
-  renderSegmentList()
-  updateTotals()
-  saveCurrentPathState()
-}
-
-function generateFromSimulation() {
-  const result = runSegmentPipeline(segments)
-
-  if ('error' in result) {
-    setStatus(`Error: ${result.error}`)
-    return
-  }
-
-  cancelLiveUpdate()
-
-  const wasPlaced = isPlaced
-
-  footprints = result.tValues.map(t => ({ t: parseFloat(t.toFixed(4)) }))
-
-  // Switch to manual to show generated sliders for fine-tuning
-  switchMode('manual')
-  renderFootprintList()
-
-  if (wasPlaced) {
-    needsUpdate = true
-  }
-  updateUIState()
-  saveCurrentPathState()
-
-  const segSummary = result.segmentsComputed.map((s, i) =>
-    `Seg${i + 1}: ${formatSpeed(s.speedMs)}×${formatDuration(s.durationSec)}→${s.numSamples}pts`
-  ).join(' | ')
-  setStatus(`Generated ${result.totalParticipants} positions. ${segSummary}`)
-  client.notify(`${result.totalParticipants} positions generated from ${segments.length} segment(s)`, 'success')
+  return results
 }
 
 
 // =============================================================================
-// SAVE / RESTORE PER-PATH STATE
+// UI HELPERS
 // =============================================================================
 
-function saveCurrentPathState() {
-  if (!selectedPathId) return
-  pathStateMap.set(selectedPathId, {
-    footprints: footprints.map(f => ({ t: f.t })),
-    templateId: selectedTemplate.id,
-    placedShapeIds: [...placedShapeIds],
-    isPlaced,
-    needsUpdate,
-    activeMode,
-    segments: segments.map(s => ({ ...s })),
-  })
+let client: ExtensionClient
+let idCounter = 0
+function nextId(prefix = 'fplab'): string { return `${prefix}_${++idCounter}_${Date.now().toString(36)}` }
+
+function setStatus(msg: string) {
+  const el = document.getElementById('status')
+  if (el) el.textContent = msg
 }
-
-function restorePathState(pathId: string) {
-  const saved = pathStateMap.get(pathId)
-  if (saved) {
-    footprints = saved.footprints.map(f => ({ t: f.t }))
-    const tmpl = TEMPLATES.find(t => t.id === saved.templateId)
-    if (tmpl) selectedTemplate = tmpl
-    placedShapeIds = [...saved.placedShapeIds]
-    isPlaced = saved.isPlaced
-    needsUpdate = saved.needsUpdate
-    activeMode = saved.activeMode
-    segments = saved.segments.map(s => ({ ...s }))
-  } else {
-    footprints = []
-    placedShapeIds = []
-    isPlaced = false
-    needsUpdate = false
-    activeMode = 'manual'
-    segments = []
-  }
-}
-
-
-// =============================================================================
-// UI RENDERING
-// =============================================================================
 
 function hostUrl(path: string): string {
   try {
@@ -566,12 +563,145 @@ function hostUrl(path: string): string {
   } catch { return path }
 }
 
-function renderTemplateGrid() {
+function getActiveConfig(): PathConfig | undefined {
+  return activePathId ? getPathConfig(activePathId) : undefined
+}
+
+
+// =============================================================================
+// RENDER EVERYTHING
+// =============================================================================
+
+function renderAll() {
+  // Sync global inputs
+  const rateInput = document.getElementById('global-sampling-rate') as HTMLInputElement | null
+  if (rateInput) rateInput.value = String(globalSamplingRate)
+  const scaleInput = document.getElementById('canvas-scale') as HTMLInputElement | null
+  if (scaleInput) scaleInput.value = metersPerCanvasUnit > 0 ? String(metersPerCanvasUnit) : ''
+  updateSpeedUnitOptions()
+
+  renderPathTabs()
+  renderPathConfig()
+  renderGlobalTimeline()
+  updateVideoUI()
+}
+
+
+// =============================================================================
+// PATH TABS
+// =============================================================================
+
+function renderPathTabs() {
+  const container = document.getElementById('path-tabs')!
+  const emptyEl = document.getElementById('scene-empty')!
+  container.innerHTML = ''
+
+  if (scene.length === 0) {
+    emptyEl.style.display = 'flex'
+    document.getElementById('path-config')!.style.display = 'none'
+    document.getElementById('global-timeline-section')!.style.display = 'none'
+    document.getElementById('video-section')!.style.display = 'none'
+    return
+  }
+
+  emptyEl.style.display = 'none'
+
+  scene.forEach(pc => {
+    const tab = document.createElement('div')
+    tab.className = `path-tab${pc.pathId === activePathId ? ' active' : ''}`
+    tab.innerHTML = `
+      <span class="color-dot" style="background:${pc.color};"></span>
+      <span class="path-label">${pc.label}</span>
+      <button class="tab-remove" title="Remove from scene">&times;</button>
+    `
+    tab.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).classList.contains('tab-remove')) return
+      setActivePath(pc.pathId)
+    })
+    tab.querySelector('.tab-remove')!.addEventListener('click', (e) => {
+      e.stopPropagation()
+      removePathFromScene(pc.pathId)
+      renderAll()
+    })
+    container.appendChild(tab)
+  })
+}
+
+
+// =============================================================================
+// PER-PATH CONFIG PANEL
+// =============================================================================
+
+function renderPathConfig() {
+  const panel = document.getElementById('path-config')!
+  const config = getActiveConfig()
+
+  if (!config) {
+    panel.style.display = 'none'
+    return
+  }
+  panel.style.display = 'block'
+
+  // Path info — show canvas arc and derived real-world length
+  const canvasArc = totalArcLength(config.displayPoints)
+  const smoothed = config.displayPoints.length > 0 ? ' (smoothed)' : ''
+  const pathLen = getPathLength(config)
+  const lengthInfo = hasScale()
+    ? `${canvasArc.toFixed(0)} cu · ${formatDistance(pathLen)}`
+    : `${canvasArc.toFixed(0)} cu`
+  document.getElementById('path-info')!.textContent =
+    `${config.label} — ${config.displayPoints.length} pts${smoothed} · ${lengthInfo}`
+
+  // Start offset
+  ;(document.getElementById('path-start-offset') as HTMLInputElement).value = String(config.startOffsetSec)
+
+  // Template
+  renderTemplateGrid(config)
+
+  // Segments
+  renderSegmentList(config)
+  updateTotals(config)
+
+  // Participants (fine-tune sliders)
+  renderFootprintList(config)
+
+  // Participant count badge
+  document.getElementById('participant-count')!.textContent = String(config.participants.length)
+
+  // Place button visibility
+  const btnPlace = document.getElementById('btn-place')!
+  const liveIndicator = document.getElementById('live-indicator')!
+  const manualSection = document.getElementById('manual-section')!
+
+  if (config.participants.length === 0) {
+    btnPlace.style.display = 'none'
+    liveIndicator.style.display = 'none'
+    manualSection.style.display = 'none'
+  } else if (!config.isPlaced) {
+    btnPlace.style.display = 'block'
+    liveIndicator.style.display = 'none'
+    manualSection.style.display = 'block'
+  } else {
+    btnPlace.style.display = 'none'
+    liveIndicator.style.display = 'block'
+    manualSection.style.display = 'block'
+  }
+
+  // Init segment mode toggle styling
+  onSegModeChange()
+}
+
+
+// =============================================================================
+// TEMPLATE GRID
+// =============================================================================
+
+function renderTemplateGrid(config: PathConfig) {
   const container = document.getElementById('template-grid')!
   container.innerHTML = ''
   TEMPLATES.forEach(tmpl => {
     const btn = document.createElement('button')
-    btn.className = `template-btn${tmpl.id === selectedTemplate.id ? ' active' : ''}`
+    btn.className = `template-btn${tmpl.id === config.templateId ? ' active' : ''}`
     btn.title = tmpl.name
     const maxSize = 24, aspect = tmpl.vbW / tmpl.vbH
     let iconW = maxSize, iconH = maxSize
@@ -587,326 +717,1240 @@ function renderTemplateGrid() {
     } else {
       btn.innerHTML = `<span>${tmpl.name}</span>`
     }
-    btn.addEventListener('click', () => { selectedTemplate = tmpl; renderTemplateGrid(); saveCurrentPathState() })
+    btn.addEventListener('click', () => {
+      config.templateId = tmpl.id
+      renderTemplateGrid(config)
+    })
     container.appendChild(btn)
   })
 }
 
-function renderFootprintList() {
+
+// =============================================================================
+// SEGMENT LIST UI
+// =============================================================================
+
+function renderSegmentList(config: PathConfig) {
+  const container = document.getElementById('seg-list')!
+  container.innerHTML = ''
+
+  if (config.segments.length === 0) {
+    container.innerHTML = '<div class="seg-empty">No segments yet</div>'
+    return
+  }
+
+  let cumulDist = 0
+  const pathLen = getPathLength(config)
+
+  config.segments.forEach((seg, i) => {
+    const resolved = pathLen > 0 ? resolveSegment(seg, pathLen) : null
+    let dist = 0, dur = 0, coveragePct = 0, isOverflow = false
+
+    if (resolved && !('error' in resolved)) {
+      dist = resolved.distanceM
+      dur = resolved.durationSec
+      cumulDist += dist
+      coveragePct = pathLen > 0 ? Math.min(100, (cumulDist / pathLen) * 100) : 0
+      isOverflow = cumulDist > pathLen * 1.001
+    }
+
+    // Format segment label based on mode
+    let mainLabel: string
+    if (seg.mode === 'percent') {
+      mainLabel = `${seg.speed} ${seg.speedUnit} × ${seg.pathPercent}% path`
+    } else {
+      mainLabel = `${seg.speed} ${seg.speedUnit} × ${seg.duration} ${seg.durationUnit}`
+    }
+
+    const card = document.createElement('div')
+    card.className = 'seg-card'
+    if (isOverflow) card.style.borderColor = '#fca5a5'
+    card.innerHTML = `
+      <span class="seg-num">${i + 1}</span>
+      <div class="seg-info">
+        <div class="seg-main">${mainLabel}</div>
+        <div class="seg-detail">${formatDistance(dist)} · ${formatDuration(dur)}${pathLen > 0 ? ` · ${coveragePct.toFixed(1)}% covered` : ''}</div>
+        ${pathLen > 0 ? `<div style="height:3px; background:#e4e4e7; border-radius:2px; margin-top:2px; overflow:hidden;">
+          <div style="height:100%; width:${Math.min(100, coveragePct)}%; background:${isOverflow ? '#ef4444' : coveragePct > 95 ? '#f59e0b' : '#22c55e'}; border-radius:2px;"></div>
+        </div>` : ''}
+        ${isOverflow ? `<div style="font-size:7px; color:#ef4444; margin-top:1px;">⚠ Exceeds path length</div>` : ''}
+      </div>
+      <button class="seg-remove" data-index="${i}">&times;</button>
+    `
+    card.querySelector('.seg-remove')!.addEventListener('click', () => {
+      config.segments.splice(i, 1)
+      renderSegmentList(config)
+      updateTotals(config)
+    })
+    container.appendChild(card)
+  })
+}
+
+function updateTotals(config: PathConfig) {
+  const totalsEl = document.getElementById('sim-totals')!
+  const generateBtn = document.getElementById('btn-generate') as HTMLButtonElement
+
+  if (config.segments.length === 0) {
+    totalsEl.className = 'sim-totals empty'
+    totalsEl.innerHTML = '<div style="text-align:center;">Add segments to build a speed profile</div>'
+    generateBtn.disabled = true
+    return
+  }
+
+  const pathLen = getPathLength(config)
+  if (pathLen <= 0) {
+    totalsEl.className = 'sim-totals empty'
+    totalsEl.innerHTML = '<div style="text-align:center;color:#d97706;">Path has no geometry — select a path with points</div>'
+    generateBtn.disabled = true
+    return
+  }
+
+  const result = runSegmentPipeline(config.segments, globalSamplingRate, pathLen)
+  if ('error' in result) {
+    totalsEl.className = 'sim-totals empty'
+    totalsEl.innerHTML = `<div style="text-align:center;color:#991b1b;">${result.error}</div>`
+    generateBtn.disabled = true
+    return
+  }
+
+  const coverageColor = result.pathCoverage > 99.9 ? '#059669' : result.pathCoverage > 80 ? '#d97706' : '#6b7280'
+  const highSampleWarning = result.totalParticipants > 500
+    ? `<div style="font-size:7px; color:#d97706; margin-top:3px;">⚠ High sample count — video recording may take ~${formatDuration(result.totalParticipants * 0.6)}</div>`
+    : ''
+
+  generateBtn.disabled = false
+  totalsEl.className = 'sim-totals'
+  totalsEl.innerHTML = `
+    <div class="totals-line"><span>Path coverage</span><span class="totals-value" style="color:${coverageColor};">${result.pathCoverage.toFixed(1)}%</span></div>
+    <div style="height:4px; background:#e4e4e7; border-radius:2px; margin:3px 0; overflow:hidden;">
+      <div style="height:100%; width:${Math.min(100, result.pathCoverage)}%; background:${coverageColor}; border-radius:2px; transition:width 0.2s;"></div>
+    </div>
+    <div class="totals-line"><span>Participants</span><span class="totals-value">${result.totalParticipants}</span></div>
+    <div class="totals-line"><span>Duration</span><span class="totals-value">${formatDuration(result.totalDurationSec)}</span></div>
+    <div class="totals-line"><span>Distance</span><span class="totals-value">${formatDistance(result.totalDistanceM)} / ${formatDistance(pathLen)}</span></div>
+    <div class="totals-line"><span>Sample interval</span><span class="totals-value">${formatDuration(1 / globalSamplingRate)}</span></div>
+    ${highSampleWarning}
+  `
+}
+
+
+// =============================================================================
+// FOOTPRINT SLIDERS (fine-tune)
+// =============================================================================
+
+function renderFootprintList(config: PathConfig) {
   const container = document.getElementById('footprint-list')!
   container.innerHTML = ''
 
-  footprints.forEach((fp, i) => {
+  config.participants.forEach((fp, i) => {
     const row = document.createElement('div')
     row.className = 'footprint-row'
     row.innerHTML = `
       <span class="index">${i + 1}</span>
       <input type="range" min="0" max="1" step="0.01" value="${fp.t}" data-index="${i}" />
       <span class="t-value">${fp.t.toFixed(2)}</span>
-      <button class="btn-remove" data-index="${i}">&times;</button>
     `
     const slider = row.querySelector('input')!
     slider.addEventListener('input', (e) => {
       const idx = parseInt((e.target as HTMLInputElement).dataset.index!)
-      footprints[idx].t = parseFloat((e.target as HTMLInputElement).value)
-      row.querySelector('.t-value')!.textContent = footprints[idx].t.toFixed(2)
-      if (isPlaced && !needsUpdate) debouncedLiveUpdate()
-      saveCurrentPathState()
-    })
-    const removeBtn = row.querySelector('button')!
-    removeBtn.addEventListener('click', (e) => {
-      const idx = parseInt((e.target as HTMLButtonElement).dataset.index!)
-      footprints.splice(idx, 1)
-      renderFootprintList()
-      cancelLiveUpdate()
-      if (isPlaced) { needsUpdate = true }
-      if (footprints.length === 0) { clearPlacedShapes(); isPlaced = false; needsUpdate = false }
-      updateUIState()
-      saveCurrentPathState()
+      config.participants[idx].t = parseFloat((e.target as HTMLInputElement).value)
+      row.querySelector('.t-value')!.textContent = config.participants[idx].t.toFixed(2)
+      if (config.isPlaced) debouncedLiveUpdate(config)
     })
     container.appendChild(row)
   })
-  updateUIState()
-}
-
-function setStatus(msg: string) {
-  document.getElementById('status')!.textContent = msg
 }
 
 
 // =============================================================================
-// LIVE UPDATE (debounced delete-and-recreate)
+// SEGMENT MODE TOGGLE
 // =============================================================================
 
-let liveDebounceTimer: ReturnType<typeof setTimeout> | null = null
-let liveUpdateBusy = false
-let liveUpdateDirty = false
-let liveUpdateAborted = false
+function onSegModeChange() {
+  const mode = (document.querySelector('input[name="seg-mode"]:checked') as HTMLInputElement)?.value || 'time'
+  const timeRow = document.getElementById('seg-time-row')!
+  const pctRow = document.getElementById('seg-pct-row')!
+  const timeLabel = document.getElementById('seg-mode-time-label')!
+  const pctLabel = document.getElementById('seg-mode-pct-label')!
 
-function cancelLiveUpdate() {
-  if (liveDebounceTimer) { clearTimeout(liveDebounceTimer); liveDebounceTimer = null }
-  liveUpdateAborted = true
-  liveUpdateDirty = false
-}
-
-function debouncedLiveUpdate() {
-  if (liveDebounceTimer) clearTimeout(liveDebounceTimer)
-  liveDebounceTimer = setTimeout(() => { liveDebounceTimer = null; runLiveUpdate() }, 120)
-}
-
-async function runLiveUpdate() {
-  if (!selectedPathId || selectedPathPoints.length < 2) return
-  if (!isPlaced || needsUpdate) return
-  if (footprints.length === 0) return
-  if (liveUpdateBusy) { liveUpdateDirty = true; return }
-
-  liveUpdateBusy = true
-  liveUpdateDirty = false
-  liveUpdateAborted = false
-  const pathId = selectedPathId
-
-  try {
-    if (liveUpdateAborted) return
-    const freshShapes = await client.requestShapes({ ids: [pathId] })
-    if (liveUpdateAborted) return
-    const freshPath = freshShapes.find(s => s.id === pathId)
-    if (freshPath) {
-      const dp = freshPath.props._displayPoints as Point2D[] | undefined
-      if (dp && dp.length >= 2) selectedPathPoints = dp
-    }
-    if (liveUpdateAborted) return
-
-    if (placedShapeIds.length > 0) {
-      client.deleteShapes(placedShapeIds)
-      await new Promise(r => setTimeout(r, 150))
-    }
-    if (liveUpdateAborted) return
-
-    const sorted = [...footprints].sort((a, b) => a.t - b.t)
-    const shapeType = selectedTemplate.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
-    const attrType = selectedTemplate.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
-    const attrSubtype = selectedTemplate.type === 'pedestrian' ? 'person' : 'car'
-
-    const shapes: BaseShape[] = sorted.map(fp => {
-      const ev = evaluatePathAt(selectedPathPoints, fp.t)
-      return {
-        id: nextId('fp'), type: shapeType,
-        x: ev.position.x, y: ev.position.y, rotation: ev.tangentAngleDeg,
-        zIndex: shapeType === 'pedestrian' ? 3000 : 4000,
-        props: {
-          w: selectedTemplate.w, h: selectedTemplate.h,
-          color: 'black', size: 'm', opacity: 1,
-          attributes: { type: attrType, subtype: attrSubtype },
-          osmId: '', templateId: selectedTemplate.id, parentPathId: pathId,
-        },
-      }
-    })
-    client.addShapes(shapes)
-    await new Promise(r => setTimeout(r, 350))
-    if (liveUpdateAborted) return
-
-    let allOfType: BaseShape[] = []
-    for (const qt of ['vehicle', 'pedestrian']) {
-      allOfType = allOfType.concat(await client.requestShapes({ types: [qt] }))
-    }
-    if (liveUpdateAborted) return
-
-    placedShapeIds = allOfType.filter(s => s.props.parentPathId === pathId).map(s => s.id)
-
-    if (placedShapeIds.length > 0) {
-      const arcLengths = computeArcLengths(selectedPathPoints)
-      const totalLen = arcLengths[arcLengths.length - 1]
-      const interval = sorted.length > 1 ? Math.round(totalLen / (sorted.length - 1)) : Math.round(totalLen)
-      client.updateShapes([{
-        id: pathId,
-        props: {
-          footprint: { interval, offset: 0, templateId: selectedTemplate.id, anchorOffset: 0, mode: 'variable', tValues: sorted.map(f => f.t) },
-          footprintIds: placedShapeIds,
-        },
-      }])
-    }
-    saveCurrentPathState()
-  } catch (e) {
-    console.warn('[FootprintLab] Live update error:', e)
-  } finally {
-    liveUpdateBusy = false
-    if (!liveUpdateAborted && liveUpdateDirty) { liveUpdateDirty = false; runLiveUpdate() }
+  if (mode === 'percent') {
+    timeRow.style.display = 'none'
+    pctRow.style.display = 'flex'
+    pctLabel.style.background = '#fff'
+    pctLabel.style.color = '#4f46e5'
+    pctLabel.style.boxShadow = '0 1px 2px rgba(0,0,0,0.06)'
+    timeLabel.style.background = 'transparent'
+    timeLabel.style.color = '#71717a'
+    timeLabel.style.boxShadow = 'none'
+  } else {
+    timeRow.style.display = 'flex'
+    pctRow.style.display = 'none'
+    timeLabel.style.background = '#fff'
+    timeLabel.style.color = '#4f46e5'
+    timeLabel.style.boxShadow = '0 1px 2px rgba(0,0,0,0.06)'
+    pctLabel.style.background = 'transparent'
+    pctLabel.style.color = '#71717a'
+    pctLabel.style.boxShadow = 'none'
   }
 }
 
+// =============================================================================
+// ACTIONS — APPLY SETTINGS (button-triggered, not oninput)
+// =============================================================================
+
+/**
+ * Reads sampling rate + scale from inputs, re-generates all paths.
+ * Called on "Apply Scene Settings" button click.
+ */
+function applySceneSettings() {
+  // Read sampling rate
+  const rateVal = parseFloat((document.getElementById('global-sampling-rate') as HTMLInputElement).value) || 1
+  globalSamplingRate = Math.max(0.001, rateVal)
+
+  // Read scale
+  const scaleVal = parseFloat((document.getElementById('canvas-scale') as HTMLInputElement).value) || 0
+  metersPerCanvasUnit = Math.max(0, scaleVal)
+
+  // Update speed unit dropdowns
+  updateSpeedUnitOptions()
+
+  // Re-generate all paths
+  for (const config of scene) {
+    if (config.segments.length === 0) continue
+    const pathLen = getPathLength(config)
+    if (pathLen <= 0) continue
+    const hasRealWorldUnits = config.segments.some(s => unitRequiresScale(s.speedUnit))
+    if (!hasScale() && hasRealWorldUnits) {
+      config.participants = []
+      config.isPlaced = false
+      continue
+    }
+    const result = runSegmentPipeline(config.segments, globalSamplingRate, pathLen)
+    if ('error' in result) { config.participants = []; config.isPlaced = false; continue }
+    config.participants = result.tValues.map((t, i) => ({
+      t: parseFloat(t.toFixed(4)),
+      localTimeSec: result.localTimestamps[i],
+    }))
+    config.localDurationSec = result.totalDurationSec
+    config.isPlaced = false
+  }
+
+  renderAll()
+  setStatus('Scene settings applied')
+}
+
+/**
+ * Reads start offset from input, updates timeline.
+ * Called on per-path "Apply" button click.
+ */
+function applyPathSettings() {
+  const config = getActiveConfig()
+  if (!config) return
+  config.startOffsetSec = Math.max(0, parseFloat((document.getElementById('path-start-offset') as HTMLInputElement).value) || 0)
+  renderGlobalTimeline()
+  updateVideoUI()
+  setStatus(`Start offset set to ${formatDuration(config.startOffsetSec)}`)
+}
 
 // =============================================================================
-// FULL RE-PLACE SHAPES
+// ACTIONS — PER-PATH
 // =============================================================================
 
-async function fullRePlaceShapes() {
-  if (!selectedPathId || selectedPathPoints.length < 2) return 0
-  if (footprints.length === 0) return 0
+function calibrateFromPath() {
+  const config = getActiveConfig()
+  if (!config || config.displayPoints.length < 2) {
+    setStatus('Select a path first')
+    return
+  }
+  const knownLength = parseFloat((document.getElementById('calibrate-length') as HTMLInputElement).value) || 0
+  if (knownLength <= 0) {
+    setStatus('Enter a positive real-world length for this path')
+    return
+  }
+  const arcLen = totalArcLength(config.displayPoints)
+  if (arcLen <= 0) {
+    setStatus('Path has zero canvas length')
+    return
+  }
+  metersPerCanvasUnit = knownLength / arcLen
+  ;(document.getElementById('canvas-scale') as HTMLInputElement).value = metersPerCanvasUnit.toFixed(6)
+  updateSpeedUnitOptions()
+  renderAll()
+  setStatus(`Scale set: 1 cu = ${metersPerCanvasUnit.toFixed(4)} m (from ${config.label}: ${formatDistance(knownLength)})`)
+  client.notify(`Scale calibrated: 1 canvas unit = ${metersPerCanvasUnit.toFixed(4)} m`, 'success')
+}
+
+/** Enable/disable real-world speed units based on whether scale is set */
+function updateSpeedUnitOptions() {
+  const selects = document.querySelectorAll('.speed-unit-select') as NodeListOf<HTMLSelectElement>
+  selects.forEach(sel => {
+    for (const opt of sel.options) {
+      if (opt.value !== 'cu/s') {
+        opt.disabled = !hasScale()
+        if (!hasScale() && sel.value === opt.value) {
+          sel.value = 'cu/s'
+        }
+      }
+    }
+  })
+}
+
+function addSegment() {
+  const config = getActiveConfig()
+  if (!config) return
+
+  const mode = (document.querySelector('input[name="seg-mode"]:checked') as HTMLInputElement)?.value as SegmentMode || 'time'
+  const speed = parseFloat((document.getElementById('seg-speed') as HTMLInputElement).value) || 0
+  const speedUnit = (document.getElementById('seg-speed-unit') as HTMLSelectElement).value as SpeedUnit
+
+  if (speed <= 0) { setStatus('Speed must be positive'); return }
+  if (unitRequiresScale(speedUnit) && !hasScale()) {
+    setStatus(`Unit "${speedUnit}" requires canvas scale to be set`)
+    return
+  }
+
+  let newSeg: SpeedSegment
+
+  if (mode === 'percent') {
+    const pct = parseFloat((document.getElementById('seg-percent') as HTMLInputElement).value) || 0
+    if (pct <= 0 || pct > 100) { setStatus('Path % must be between 0 and 100'); return }
+    newSeg = { mode: 'percent', speed, speedUnit, pathPercent: pct }
+  } else {
+    const duration = parseFloat((document.getElementById('seg-time') as HTMLInputElement).value) || 0
+    const durationUnit = (document.getElementById('seg-time-unit') as HTMLSelectElement).value as TimeUnit
+    if (duration <= 0) { setStatus('Duration must be positive'); return }
+    newSeg = { mode: 'time', speed, speedUnit, duration, durationUnit }
+  }
+
+  // Pre-validate: check if adding this segment would exceed path length
+  const pathLen = getPathLength(config)
+  if (pathLen > 0) {
+    const testSegments = [...config.segments, newSeg]
+    let totalDist = 0
+    for (const seg of testSegments) {
+      const resolved = resolveSegment(seg, pathLen)
+      if ('error' in resolved) { setStatus(`Error: ${resolved.error}`); return }
+      totalDist += resolved.distanceM
+    }
+    if (totalDist > pathLen * 1.001) {
+      const excess = totalDist - pathLen
+      const pct = ((totalDist / pathLen) * 100).toFixed(1)
+      setStatus(`Cannot add: would exceed path by ${formatDistance(excess)} (${pct}%)`)
+      return
+    }
+  }
+
+  config.segments.push(newSeg)
+  renderSegmentList(config)
+  updateTotals(config)
+  setStatus('')
+}
+
+function generateParticipants() {
+  const config = getActiveConfig()
+  if (!config) return
+  const pathLen = getPathLength(config)
+  if (pathLen <= 0) { setStatus('Path has no geometry'); return }
+
+  const result = runSegmentPipeline(config.segments, globalSamplingRate, pathLen)
+  if ('error' in result) { setStatus(`Error: ${result.error}`); return }
+
+  config.participants = result.tValues.map((t, i) => ({
+    t: parseFloat(t.toFixed(4)),
+    localTimeSec: result.localTimestamps[i],
+  }))
+  config.localDurationSec = result.totalDurationSec
+  config.isPlaced = false
+
+  renderAll()
+  setStatus(`Generated ${result.totalParticipants} positions for ${config.label}`)
+  client.notify(`${result.totalParticipants} positions generated for ${config.label}`, 'success')
+}
+
+function clearActivePath() {
+  const config = getActiveConfig()
+  if (!config) return
+  removePathFromScene(config.pathId)
+  renderAll()
+  client.notify('Path removed from scene', 'info')
+}
+
+
+// =============================================================================
+// PLACEMENT — single path
+// =============================================================================
+
+async function placePathParticipants(config: PathConfig): Promise<number> {
+  if (config.displayPoints.length < 2 || config.participants.length === 0) return 0
+
   try {
-    const freshShapes = await client.requestShapes({ ids: [selectedPathId] })
-    const freshPath = freshShapes.find(s => s.id === selectedPathId)
+    // Refresh display points
+    const freshShapes = await client.requestShapes({ ids: [config.pathId] })
+    const freshPath = freshShapes.find(s => s.id === config.pathId)
     if (freshPath) {
       const dp = freshPath.props._displayPoints as Point2D[] | undefined
-      if (dp && dp.length >= 2) selectedPathPoints = dp
+      if (dp && dp.length >= 2) config.displayPoints = dp
     }
-    await clearPlacedShapes()
 
-    const sorted = [...footprints].sort((a, b) => a.t - b.t)
-    const arcLengths = computeArcLengths(selectedPathPoints)
-    const totalLen = arcLengths[arcLengths.length - 1]
-    const interval = sorted.length > 1 ? Math.round(totalLen / (sorted.length - 1)) : Math.round(totalLen)
+    // Clear existing placed shapes for this path
+    await clearPlacedShapesForPath(config)
 
-    const shapeType = selectedTemplate.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
-    const attrType = selectedTemplate.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
-    const attrSubtype = selectedTemplate.type === 'pedestrian' ? 'person' : 'car'
+    const sorted = [...config.participants].sort((a, b) => a.t - b.t)
+    const tmpl = templateById(config.templateId)
+    const shapeType = tmpl.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
+    const attrType = tmpl.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
+    const attrSubtype = tmpl.type === 'pedestrian' ? 'person' : 'car'
 
     const shapes: BaseShape[] = sorted.map(fp => {
-      const ev = evaluatePathAt(selectedPathPoints, fp.t)
+      const ev = evaluatePathAt(config.displayPoints, fp.t)
       return {
         id: nextId('fp'), type: shapeType,
         x: ev.position.x, y: ev.position.y, rotation: ev.tangentAngleDeg,
         zIndex: shapeType === 'pedestrian' ? 3000 : 4000,
         props: {
-          w: selectedTemplate.w, h: selectedTemplate.h,
+          w: tmpl.w, h: tmpl.h,
           color: 'black', size: 'm', opacity: 1,
           attributes: { type: attrType, subtype: attrSubtype },
-          osmId: '', templateId: selectedTemplate.id, parentPathId: selectedPathId,
+          osmId: '', templateId: tmpl.id, parentPathId: config.pathId,
         },
       }
     })
     client.addShapes(shapes)
     await new Promise(r => setTimeout(r, 500))
 
+    // Query back to get actual IDs
     let allOfType: BaseShape[] = []
     for (const qt of ['vehicle', 'pedestrian']) {
       allOfType = allOfType.concat(await client.requestShapes({ types: [qt] }))
     }
-    placedShapeIds = allOfType.filter(s => s.props.parentPathId === selectedPathId).map(s => s.id)
+    config.placedShapeIds = allOfType.filter(s => s.props.parentPathId === config.pathId).map(s => s.id)
 
-    if (placedShapeIds.length > 0) {
+    // Update path's footprint metadata
+    if (config.placedShapeIds.length > 0) {
+      const arcLengths = computeArcLengths(config.displayPoints)
+      const totalLen = arcLengths[arcLengths.length - 1]
+      const interval = sorted.length > 1 ? Math.round(totalLen / (sorted.length - 1)) : Math.round(totalLen)
       client.updateShapes([{
-        id: selectedPathId,
+        id: config.pathId,
         props: {
-          footprint: { interval, offset: 0, templateId: selectedTemplate.id, anchorOffset: 0, mode: 'variable', tValues: sorted.map(f => f.t) },
-          footprintIds: placedShapeIds,
+          footprint: { interval, offset: 0, templateId: tmpl.id, anchorOffset: 0, mode: 'variable', tValues: sorted.map(f => f.t) },
+          footprintIds: config.placedShapeIds,
         },
       }])
     }
-    isPlaced = true; needsUpdate = false
-    updateUIState(); saveCurrentPathState()
-    return placedShapeIds.length
-  } catch (e) { setStatus(`Error: ${e}`); return 0 }
+
+    config.isPlaced = true
+    return config.placedShapeIds.length
+  } catch (e) {
+    setStatus(`Error placing: ${e}`)
+    return 0
+  }
 }
 
-async function clearPlacedShapes() {
-  if (!selectedPathId) return
+async function clearPlacedShapesForPath(config: PathConfig) {
   try {
     let all: BaseShape[] = []
     for (const qt of ['vehicle', 'pedestrian']) all = all.concat(await client.requestShapes({ types: [qt] }))
-    const ids = all.filter(s => s.props.parentPathId === selectedPathId).map(s => s.id)
+    const ids = all.filter(s => s.props.parentPathId === config.pathId).map(s => s.id)
     if (ids.length > 0) { client.deleteShapes(ids); await new Promise(r => setTimeout(r, 200)) }
-    client.updateShapes([{ id: selectedPathId, props: { footprintIds: [] } }])
+    client.updateShapes([{ id: config.pathId, props: { footprintIds: [] } }])
     await new Promise(r => setTimeout(r, 100))
-    placedShapeIds = []
+    config.placedShapeIds = []
   } catch (e) { console.warn('[FootprintLab] Error clearing shapes:', e) }
 }
 
+async function placeActivePathParticipants() {
+  const config = getActiveConfig()
+  if (!config) { setStatus('Select a path first'); return }
+  setStatus(`Placing participants on ${config.label}…`)
+  const count = await placePathParticipants(config)
+  if (count > 0) {
+    client.notify(`${count} participants placed on ${config.label}`, 'success')
+    setStatus(`Placed ${count} — drag sliders to reposition`)
+  }
+  renderAll()
+}
+
+async function placeAllPaths() {
+  let totalPlaced = 0
+  for (const config of scene) {
+    if (config.participants.length === 0) continue
+    setStatus(`Placing ${config.label}…`)
+    const count = await placePathParticipants(config)
+    totalPlaced += count
+  }
+  if (totalPlaced > 0) {
+    client.notify(`${totalPlaced} participants placed across ${scene.length} path(s)`, 'success')
+    setStatus(`Placed ${totalPlaced} total participants`)
+  }
+  renderAll()
+}
+
 
 // =============================================================================
-// ACTIONS
+// LIVE UPDATE (debounced per-path)
 // =============================================================================
 
-async function refreshSelection() {
+let liveDebounceTimer: ReturnType<typeof setTimeout> | null = null
+
+function debouncedLiveUpdate(config: PathConfig) {
+  if (liveDebounceTimer) clearTimeout(liveDebounceTimer)
+  liveDebounceTimer = setTimeout(() => { liveDebounceTimer = null; placePathParticipants(config).then(() => renderAll()) }, 200)
+}
+
+
+// =============================================================================
+// GLOBAL TIMELINE RENDERING (canvas)
+// =============================================================================
+
+/** Global time of the recording playhead. -1 = hidden. */
+let timelinePlayheadSec = -1
+
+function renderGlobalTimeline() {
+  const section = document.getElementById('global-timeline-section')!
+  const hasParticipants = scene.some(p => p.participants.length > 0)
+
+  if (scene.length === 0 || !hasParticipants) {
+    section.style.display = 'none'
+    return
+  }
+  section.style.display = 'block'
+
+  const timeline = computeGlobalTimeline()
+  const canvas = document.getElementById('timeline-canvas') as HTMLCanvasElement
+  const ctx = canvas.getContext('2d')!
+
+  // High-DPI
+  const dpr = window.devicePixelRatio || 1
+  const rect = canvas.getBoundingClientRect()
+  canvas.width = rect.width * dpr
+  canvas.height = 80 * dpr
+  ctx.scale(dpr, dpr)
+  const W = rect.width
+  const H = 80
+
+  ctx.clearRect(0, 0, W, H)
+
+  if (timeline.totalDurationSec <= 0 || timeline.events.length === 0) {
+    ctx.fillStyle = '#9ca3af'
+    ctx.font = '9px system-ui'
+    ctx.textAlign = 'center'
+    ctx.fillText('No timeline data', W / 2, H / 2)
+    return
+  }
+
+  const pathsWithData = scene.filter(p => p.participants.length > 0)
+  const rowH = Math.min(16, (H - 20) / pathsWithData.length)
+  const topPad = 4
+  const leftPad = 4
+  const rightPad = 4
+  const bottomPad = 16
+  const plotW = W - leftPad - rightPad
+  const totalSec = timeline.totalDurationSec
+
+  // Draw time axis
+  ctx.strokeStyle = '#e4e4e7'
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.moveTo(leftPad, H - bottomPad)
+  ctx.lineTo(W - rightPad, H - bottomPad)
+  ctx.stroke()
+
+  // Time labels
+  ctx.fillStyle = '#9ca3af'
+  ctx.font = '8px system-ui'
+  ctx.textAlign = 'center'
+  const numTicks = Math.min(8, Math.max(2, Math.floor(plotW / 50)))
+  for (let i = 0; i <= numTicks; i++) {
+    const t = (i / numTicks) * totalSec
+    const x = leftPad + (i / numTicks) * plotW
+    ctx.fillText(formatDuration(t), x, H - 3)
+    ctx.beginPath()
+    ctx.moveTo(x, H - bottomPad)
+    ctx.lineTo(x, H - bottomPad + 3)
+    ctx.stroke()
+  }
+
+  // Draw per-path rows
+  pathsWithData.forEach((pc, rowIdx) => {
+    const y = topPad + rowIdx * rowH
+    const midY = y + rowH / 2
+
+    // Row background
+    ctx.fillStyle = pc.pathId === activePathId ? '#f0f0ff' : '#fafbff'
+    ctx.fillRect(leftPad, y, plotW, rowH - 1)
+
+    // Path color bar on left
+    ctx.fillStyle = pc.color
+    ctx.fillRect(leftPad, y + 2, 3, rowH - 5)
+
+    // Start offset marker (vertical dashed line at path start)
+    if (pc.startOffsetSec > 0) {
+      const offsetX = leftPad + (pc.startOffsetSec / totalSec) * plotW
+      ctx.strokeStyle = pc.color + '40'
+      ctx.setLineDash([2, 2])
+      ctx.beginPath()
+      ctx.moveTo(offsetX, y)
+      ctx.lineTo(offsetX, y + rowH - 1)
+      ctx.stroke()
+      ctx.setLineDash([])
+    }
+
+    // Participant ticks
+    for (const lp of pc.participants) {
+      const globalT = pc.startOffsetSec + lp.localTimeSec
+      const x = leftPad + (globalT / totalSec) * plotW
+      ctx.fillStyle = pc.color
+      ctx.fillRect(x - 1, midY - 4, 2, 8)
+    }
+  })
+
+  // ---- Recording playhead ----
+  if (timelinePlayheadSec >= 0 && totalSec > 0) {
+    const phX = leftPad + Math.min(1, timelinePlayheadSec / totalSec) * plotW
+    ctx.strokeStyle = '#ef4444'
+    ctx.lineWidth = 1.5
+    ctx.beginPath()
+    ctx.moveTo(phX, topPad - 2)
+    ctx.lineTo(phX, H - bottomPad + 2)
+    ctx.stroke()
+    // Small triangle at top
+    ctx.fillStyle = '#ef4444'
+    ctx.beginPath()
+    ctx.moveTo(phX - 3, topPad - 2)
+    ctx.lineTo(phX + 3, topPad - 2)
+    ctx.lineTo(phX, topPad + 2)
+    ctx.closePath()
+    ctx.fill()
+  }
+
+  // Legend
+  const legendContainer = document.getElementById('timeline-legend')!
+  legendContainer.innerHTML = ''
+  pathsWithData.forEach(pc => {
+    const item = document.createElement('div')
+    item.className = 'legend-item'
+    item.innerHTML = `<span class="legend-dot" style="background:${pc.color};"></span>${pc.label} (${pc.participants.length})`
+    legendContainer.appendChild(item)
+  })
+}
+
+
+// =============================================================================
+// SELECTION POLLING — auto-add paths to scene
+// =============================================================================
+
+let lastSelectionId: string | null = null
+let deselectionGraceTimer: ReturnType<typeof setTimeout> | null = null
+
+async function pollSelection() {
   try {
     const selection = await client.requestSelection()
-    if (selection.ids.length === 0) {
-      saveCurrentPathState()
-      document.getElementById('path-info')!.textContent = 'No path selected'
-      selectedPathId = null; selectedPathPoints = []; showPanel(false); return
+    const currentId = selection.ids.length > 0 ? selection.ids[0] : null
+
+    if (currentId !== lastSelectionId) {
+      lastSelectionId = currentId
+
+      if (currentId) {
+        if (deselectionGraceTimer) { clearTimeout(deselectionGraceTimer); deselectionGraceTimer = null }
+
+        const shapes = await client.requestShapes({ ids: [currentId] })
+        const path = shapes.find(s => s.type === 'linestring' && s.props.isPath)
+
+        if (path) {
+          const displayPoints = path.props._displayPoints as Point2D[] | undefined
+          let points: Point2D[] = []
+
+          if (displayPoints && displayPoints.length >= 2) {
+            points = displayPoints
+          } else {
+            const pointIds = path.props.pointIds as string[]
+            const allShapes = await client.requestShapes({ ids: pointIds })
+            points = pointIds.map(pid => {
+              const pt = allShapes.find(s => s.id === pid)
+              return pt ? { x: pt.x, y: pt.y } : { x: 0, y: 0 }
+            }).filter(p => p.x !== 0 || p.y !== 0)
+          }
+
+          if (points.length >= 2) {
+            addPathToScene(path.id, points)
+            setActivePath(path.id)
+          }
+        }
+      } else {
+        // Deselection grace period — don't immediately lose context
+        if (!deselectionGraceTimer && activePathId) {
+          deselectionGraceTimer = setTimeout(() => {
+            deselectionGraceTimer = null
+            // Keep scene intact, just note deselection
+          }, 600)
+        }
+      }
     }
-    const shapes = await client.requestShapes({ ids: selection.ids })
-    const path = shapes.find(s => s.type === 'linestring' && s.props.isPath)
-    if (!path) {
-      document.getElementById('path-info')!.textContent = 'Selected shape is not a path'
-      selectedPathId = null; selectedPathPoints = []; showPanel(false); return
-    }
-
-    const previousPathId = selectedPathId
-    if (previousPathId && previousPathId !== path.id) saveCurrentPathState()
-    selectedPathId = path.id
-
-    const displayPoints = path.props._displayPoints as Point2D[] | undefined
-    if (displayPoints && displayPoints.length >= 2) {
-      selectedPathPoints = displayPoints
-    } else {
-      const pointIds = path.props.pointIds as string[]
-      const allShapes = await client.requestShapes({ ids: pointIds })
-      selectedPathPoints = pointIds.map(pid => {
-        const pt = allShapes.find(s => s.id === pid)
-        return pt ? { x: pt.x, y: pt.y } : { x: 0, y: 0 }
-      }).filter(p => p.x !== 0 || p.y !== 0)
-    }
-
-    restorePathState(path.id)
-
-    const smoothed = displayPoints ? ' (smoothed)' : ' (raw)'
-    document.getElementById('path-info')!.textContent = `Path: ${path.id.slice(0, 16)}... (${selectedPathPoints.length} pts${smoothed})`
-
-    showPanel(true)
-    renderTemplateGrid()
-    renderFootprintList()
-    switchMode(activeMode)
-    renderSegmentList()
-    updateTotals()
-    updateUIState()
-    setStatus('Path selected')
-  } catch (e) { setStatus(`Error: ${e}`) }
+  } catch { /* ignore */ }
 }
 
-function addFootprint() {
-  const maxT = footprints.length > 0 ? Math.max(...footprints.map(f => f.t)) : 0
-  footprints.push({ t: parseFloat(Math.min(1, maxT + 0.1).toFixed(2)) })
-  renderFootprintList()
-  cancelLiveUpdate()
-  if (isPlaced) needsUpdate = true
-  updateUIState(); saveCurrentPathState()
+
+// =============================================================================
+// JSON IMPORT / EXPORT
+// =============================================================================
+
+interface SceneJSON {
+  version: 2
+  globalSamplingRate: number
+  metersPerCanvasUnit: number
+  paths: Array<{
+    pathId: string
+    label: string
+    color: string
+    startOffsetSec: number
+    templateId: string
+    segments: SpeedSegment[]
+    // Geometry snapshot — used as fallback if path not found on canvas
+    displayPoints: Point2D[]
+    canvasArcLength: number
+    // Pre-computed participants — skip re-generation on import
+    participants: LocalParticipant[]
+    localDurationSec: number
+  }>
 }
 
-function removeLastFootprint() {
-  if (footprints.length === 0) return
-  footprints.pop(); renderFootprintList(); cancelLiveUpdate()
-  if (isPlaced) {
-    if (footprints.length === 0) { clearPlacedShapes(); isPlaced = false; needsUpdate = false }
-    else needsUpdate = true
+function exportSceneJSON() {
+  const data: SceneJSON = {
+    version: 2,
+    globalSamplingRate,
+    metersPerCanvasUnit,
+    paths: scene.map(pc => ({
+      pathId: pc.pathId,
+      label: pc.label,
+      color: pc.color,
+      startOffsetSec: pc.startOffsetSec,
+      templateId: pc.templateId,
+      segments: pc.segments.map(s => ({ ...s })),
+      displayPoints: pc.displayPoints,
+      canvasArcLength: totalArcLength(pc.displayPoints),
+      participants: pc.participants.map(p => ({ t: p.t, localTimeSec: p.localTimeSec })),
+      localDurationSec: pc.localDurationSec,
+    })),
   }
-  updateUIState(); saveCurrentPathState()
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `scene-${new Date().toISOString().slice(0, 10)}.json`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+  client.notify('Scene exported', 'success')
 }
 
-async function placeParticipants() {
-  if (!selectedPathId || selectedPathPoints.length < 2) { setStatus('Select a path first'); return }
-  if (footprints.length === 0) { setStatus('Add at least one participant'); return }
-  setStatus('Placing participants...')
-  const count = await fullRePlaceShapes()
-  if (count > 0) { client.notify(`${count} participants placed`, 'success'); setStatus(`Placed ${count} participants — drag sliders to reposition`) }
-}
-
-async function updateParticipantPositions() {
-  if (!selectedPathId || selectedPathPoints.length < 2) { setStatus('Select a path first'); return }
-  if (footprints.length === 0) { setStatus('Add at least one participant'); return }
-  setStatus('Updating positions...')
-  const count = await fullRePlaceShapes()
-  if (count > 0) { client.notify(`${count} positions updated`, 'success'); setStatus(`Updated ${count} participants — drag sliders to reposition`) }
-}
-
-async function clearFootprints() {
-  if (!selectedPathId) { setStatus('Select a path first'); return }
+async function importSceneJSON(input: HTMLInputElement) {
+  const file = input.files?.[0]
+  if (!file) return
   try {
-    await clearPlacedShapes()
-    footprints = []; placedShapeIds = []; isPlaced = false; needsUpdate = false
-    renderFootprintList(); updateUIState(); saveCurrentPathState()
-    client.notify('All participants cleared', 'info'); setStatus('Cleared')
-  } catch (e) { setStatus(`Error: ${e}`) }
+    const text = await file.text()
+    const data = JSON.parse(text) as SceneJSON
+
+    if ((!data.version && !Array.isArray(data.paths)) || !Array.isArray(data.paths)) {
+      setStatus('Invalid scene JSON'); return
+    }
+
+    // Restore global settings
+    if (typeof data.globalSamplingRate === 'number' && data.globalSamplingRate > 0) {
+      globalSamplingRate = data.globalSamplingRate
+    }
+    if (typeof data.metersPerCanvasUnit === 'number' && data.metersPerCanvasUnit > 0) {
+      metersPerCanvasUnit = data.metersPerCanvasUnit
+    }
+
+    let imported = 0, skipped = 0, fromCanvas = 0, fromJSON = 0
+
+    for (const entry of data.paths) {
+      try {
+        let points: Point2D[] = []
+        let foundOnCanvas = false
+
+        // Try to find path on canvas first (fresh geometry)
+        try {
+          const shapes = await client.requestShapes({ ids: [entry.pathId] })
+          const path = shapes.find(s => s.type === 'linestring' && s.props.isPath)
+          if (path) {
+            const dp = path.props._displayPoints as Point2D[] | undefined
+            if (dp && dp.length >= 2) {
+              points = dp
+              foundOnCanvas = true
+            } else {
+              const pointIds = path.props.pointIds as string[]
+              const allShapes = await client.requestShapes({ ids: pointIds })
+              points = pointIds.map(pid => {
+                const pt = allShapes.find(s => s.id === pid)
+                return pt ? { x: pt.x, y: pt.y } : { x: 0, y: 0 }
+              }).filter(p => p.x !== 0 || p.y !== 0)
+              if (points.length >= 2) foundOnCanvas = true
+            }
+          }
+        } catch { /* canvas lookup failed — try fallback */ }
+
+        // Fallback to stored geometry from JSON
+        if (!foundOnCanvas && Array.isArray(entry.displayPoints) && entry.displayPoints.length >= 2) {
+          points = entry.displayPoints
+          fromJSON++
+        } else if (foundOnCanvas) {
+          fromCanvas++
+        }
+
+        if (points.length < 2) { skipped++; continue }
+
+        const config = addPathToScene(entry.pathId, points, entry.label)
+        config.startOffsetSec = entry.startOffsetSec ?? 0
+        config.templateId = entry.templateId ?? 'sedan'
+        config.segments = (entry.segments ?? []).map(s => ({ ...s }))
+        config.localDurationSec = entry.localDurationSec ?? 0
+
+        // Restore color if provided
+        if (entry.color) config.color = entry.color
+
+        // Restore pre-computed participants directly (skip re-generation)
+        if (Array.isArray(entry.participants) && entry.participants.length > 0) {
+          config.participants = entry.participants.map(p => ({
+            t: p.t,
+            localTimeSec: p.localTimeSec,
+          }))
+        } else if (config.segments.length > 0) {
+          // v1 JSON without participants — re-generate
+          const pathLen = getPathLength(config)
+          if (pathLen > 0) {
+            const result = runSegmentPipeline(config.segments, globalSamplingRate, pathLen)
+            if (!('error' in result)) {
+              config.participants = result.tValues.map((t, i) => ({
+                t: parseFloat(t.toFixed(4)),
+                localTimeSec: result.localTimestamps[i],
+              }))
+              config.localDurationSec = result.totalDurationSec
+            }
+          }
+        }
+
+        imported++
+      } catch (e) {
+        console.warn(`[FootprintLab] Failed to import path ${entry.pathId}:`, e)
+        skipped++
+      }
+    }
+
+    if (scene.length > 0 && !activePathId) {
+      activePathId = scene[0].pathId
+    }
+
+    renderAll()
+    const parts: string[] = [`Imported ${imported} path(s)`]
+    if (fromCanvas > 0) parts.push(`${fromCanvas} from canvas`)
+    if (fromJSON > 0) parts.push(`${fromJSON} from stored geometry`)
+    if (skipped > 0) parts.push(`${skipped} skipped`)
+    const msg = parts.join(', ')
+    setStatus(msg)
+    client.notify(msg, imported > 0 ? 'success' : 'error')
+  } catch (e) {
+    setStatus(`JSON parse error: ${e}`)
+  }
+  input.value = '' // reset so same file can be re-imported
 }
+
+// Drag-and-drop support
+function initJSONDropZone() {
+  const zone = document.getElementById('json-drop-zone')!
+  zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('drag-over') })
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'))
+  zone.addEventListener('drop', async (e) => {
+    e.preventDefault()
+    zone.classList.remove('drag-over')
+    const file = e.dataTransfer?.files[0]
+    if (!file || !file.name.endsWith('.json')) { setStatus('Please drop a .json file'); return }
+    // Simulate file input
+    const input = document.getElementById('json-file-input') as HTMLInputElement
+    const dt = new DataTransfer()
+    dt.items.add(file)
+    input.files = dt.files
+    await importSceneJSON(input)
+  })
+}
+
+
+// =============================================================================
+// VIDEO — Multi-path composite recording
+// =============================================================================
+
+let videoBlob: Blob | null = null
+let videoRecording = false
+let videoCancelled = false
+
+interface CompositeFrameSpec {
+  globalTimeSec: number
+  positions: Array<{ pathConfig: PathConfig; t: number }>
+}
+
+function computeCompositeFrameSpecs(): CompositeFrameSpec[] | { error: string } {
+  const timeline = computeGlobalTimeline()
+  if (timeline.events.length === 0) return { error: 'No participants in scene' }
+
+  // Collect unique global timestamps (deduplicated)
+  const timestamps = [...new Set(timeline.events.map(e => e.globalTimeSec))].sort((a, b) => a - b)
+
+  return timestamps.map(globalTime => ({
+    globalTimeSec: globalTime,
+    positions: resolvePositionsAtGlobalTime(globalTime),
+  }))
+}
+
+function updateVideoUI() {
+  const section = document.getElementById('video-section')!
+  const hasParticipants = scene.some(p => p.participants.length > 0)
+  section.style.display = hasParticipants ? 'block' : 'none'
+  if (!hasParticipants) return
+
+  onVideoSettingsChange()
+}
+
+function onVideoSettingsChange() {
+  const dur = parseFloat((document.getElementById('vid-duration') as HTMLInputElement).value) || 10
+  const specs = computeCompositeFrameSpecs()
+
+  const countEl = document.getElementById('vid-frame-count')!
+  const activeEl = document.getElementById('vid-active-paths')!
+  const realDurEl = document.getElementById('vid-real-duration')!
+  const fpsEl = document.getElementById('vid-fps')!
+  const captureEstEl = document.getElementById('vid-capture-est')!
+
+  if ('error' in specs) {
+    countEl.textContent = '—'
+    activeEl.textContent = specs.error
+    realDurEl.textContent = '—'
+    fpsEl.textContent = '—'
+    captureEstEl.textContent = '—'
+    return
+  }
+
+  const timeline = computeGlobalTimeline()
+  const fps = specs.length / dur
+
+  countEl.textContent = `${specs.length}`
+  activeEl.textContent = `${timeline.pathCount}`
+  realDurEl.textContent = formatDuration(timeline.totalDurationSec)
+  fpsEl.textContent = `${fps.toFixed(1)} fps`
+  captureEstEl.textContent = `~${formatDuration(specs.length * 0.6)}`
+}
+
+function buildShapeForPath(config: PathConfig, ev: PathEvalResult): BaseShape {
+  const tmpl = templateById(config.templateId)
+  const shapeType = tmpl.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
+  const attrType = tmpl.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
+  const attrSubtype = tmpl.type === 'pedestrian' ? 'person' : 'car'
+  return {
+    id: nextId('vfr'), type: shapeType,
+    x: ev.position.x, y: ev.position.y, rotation: ev.tangentAngleDeg,
+    zIndex: shapeType === 'pedestrian' ? 3000 : 4000,
+    props: {
+      w: tmpl.w, h: tmpl.h,
+      color: 'black', size: 'm', opacity: 1,
+      attributes: { type: attrType, subtype: attrSubtype },
+      osmId: '', templateId: tmpl.id, parentPathId: config.pathId,
+    },
+  }
+}
+
+async function clearAllPlacedShapes() {
+  for (const config of scene) {
+    await clearPlacedShapesForPath(config)
+  }
+}
+
+async function captureHostFrame(): Promise<string> {
+  const requestId = 'frame_' + (++idCounter) + '_' + Date.now().toString(36)
+  return new Promise<string>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      window.removeEventListener('message', handler)
+      reject(new Error('Host frame capture timed out'))
+    }, 10000)
+
+    function handler(event: MessageEvent) {
+      const data = event.data
+      if (!data || typeof data !== 'object') return
+      if (data.type === 'ext:export-response' && data.payload?.requestId === requestId) {
+        window.removeEventListener('message', handler)
+        clearTimeout(timeout)
+        if (data.payload.data) resolve(data.payload.data as string)
+        else reject(new Error('No data in export response'))
+      }
+      if (data.type === 'ext:error' && data.payload?.requestId === requestId) {
+        window.removeEventListener('message', handler)
+        clearTimeout(timeout)
+        reject(new Error(data.payload.message || 'Export error'))
+      }
+    }
+    window.addEventListener('message', handler)
+    window.parent.postMessage({
+      type: 'ext:export-request',
+      payload: { requestId, format: 'png', returnData: true },
+    }, '*')
+  })
+}
+
+function loadImage(dataUrl: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error('Failed to load image'))
+    img.src = dataUrl
+  })
+}
+
+/**
+ * Refresh display points for all scene paths from the host.
+ * Ensures positions are correct even if the canvas was moved.
+ */
+async function refreshAllDisplayPoints() {
+  for (const config of scene) {
+    try {
+      const shapes = await client.requestShapes({ ids: [config.pathId] })
+      const path = shapes.find(s => s.id === config.pathId)
+      if (path) {
+        const dp = path.props._displayPoints as Point2D[] | undefined
+        if (dp && dp.length >= 2) config.displayPoints = dp
+      }
+    } catch (e) {
+      console.warn(`[FootprintLab] Failed to refresh ${config.label}:`, e)
+    }
+  }
+}
+
+async function recordVideo() {
+  const hasParticipants = scene.some(p => p.participants.length > 0)
+  if (!hasParticipants) { setStatus('No participants to animate'); return }
+
+  onVideoSettingsChange()
+
+  const targetDuration = parseFloat((document.getElementById('vid-duration') as HTMLInputElement).value) || 10
+  const specs = computeCompositeFrameSpecs()
+  if ('error' in specs) { setStatus(`Error: ${specs.error}`); return }
+  if (specs.length === 0) { setStatus('No frames to record'); return }
+
+  const targetFps = specs.length / targetDuration
+  const frameDurationMs = 1000 / targetFps
+
+  videoRecording = true
+  videoCancelled = false
+  videoBlob = null
+
+  const canvas = document.getElementById('vid-canvas') as HTMLCanvasElement
+  const ctx = canvas.getContext('2d')!
+  const recordBtn = document.getElementById('vid-record-btn')!
+  const cancelBtn = document.getElementById('vid-cancel-btn')!
+  const downloadBtn = document.getElementById('vid-download-btn')!
+  const progressWrap = document.getElementById('vid-progress-wrap')!
+  const progressBar = document.getElementById('vid-progress-bar')!
+  const progressText = document.getElementById('vid-progress-text')!
+  const progressPct = document.getElementById('vid-progress-pct')!
+
+  recordBtn.style.display = 'none'
+  cancelBtn.style.display = 'inline-block'
+  downloadBtn.style.display = 'none'
+  progressWrap.style.display = 'block'
+  progressBar.style.width = '0%'
+  progressText.textContent = 'Phase 1: Capturing frames…'
+  progressPct.textContent = '0%'
+
+  // =========================================================================
+  // PHASE 1: Capture all frames as image data URLs (slow — host rendering)
+  // =========================================================================
+  const capturedFrames: Array<{ dataUrl: string; globalTimeSec: number }> = []
+
+  try {
+    await refreshAllDisplayPoints()
+
+    for (let i = 0; i < specs.length; i++) {
+      if (videoCancelled) break
+
+      const frame = specs[i]
+      const pct = ((i + 1) / specs.length * 50).toFixed(0) // Phase 1 = 0-50%
+      progressBar.style.width = `${pct}%`
+      progressPct.textContent = `${pct}%`
+      progressText.textContent = `Capturing ${i + 1}/${specs.length} (${frame.positions.length} vehicles)…`
+
+      // Update timeline playhead
+      timelinePlayheadSec = frame.globalTimeSec
+      renderGlobalTimeline()
+
+      // 1. Clear all placed shapes
+      await clearAllPlacedShapes()
+      if (videoCancelled) break
+      await new Promise(r => setTimeout(r, 80))
+
+      // 2. Re-fetch path coordinates
+      await refreshAllDisplayPoints()
+      if (videoCancelled) break
+
+      // 3. Place all active vehicles for this frame
+      const tempShapeIds: string[] = []
+      for (const pos of frame.positions) {
+        const ev = evaluatePathAt(pos.pathConfig.displayPoints, pos.t)
+        const shape = buildShapeForPath(pos.pathConfig, ev)
+        client.addShapes([shape])
+        tempShapeIds.push(shape.id)
+      }
+
+      // 4. Wait for host to render
+      await new Promise(r => setTimeout(r, 350))
+      if (videoCancelled) { client.deleteShapes(tempShapeIds); break }
+
+      // 5. Capture composite scene
+      let dataUrl: string
+      try {
+        dataUrl = await captureHostFrame()
+      } catch (e) {
+        console.warn(`[FootprintLab] Frame ${i + 1} capture failed:`, e)
+        client.deleteShapes(tempShapeIds)
+        continue
+      }
+
+      // 6. Clean up temp shapes
+      client.deleteShapes(tempShapeIds)
+
+      capturedFrames.push({ dataUrl, globalTimeSec: frame.globalTimeSec })
+    }
+  } catch (e) {
+    console.error('[FootprintLab] Capture phase error:', e)
+  }
+
+  // Restore scene
+  progressText.textContent = 'Restoring scene…'
+  timelinePlayheadSec = -1
+  renderGlobalTimeline()
+  try {
+    for (const config of scene) {
+      if (config.participants.length > 0) await placePathParticipants(config)
+    }
+  } catch {}
+
+  if (videoCancelled || capturedFrames.length === 0) {
+    progressText.textContent = videoCancelled ? 'Cancelled' : 'No frames captured'
+    videoRecording = false
+    cancelBtn.style.display = 'none'
+    recordBtn.style.display = 'block'
+    recordBtn.style.flex = '1'
+    return
+  }
+
+  // =========================================================================
+  // PHASE 2: Encode cached frames to video at target FPS (fast)
+  // =========================================================================
+  progressText.textContent = `Phase 2: Encoding ${capturedFrames.length} frames at ${targetFps.toFixed(1)} fps…`
+
+  const stream = canvas.captureStream(0) // manual frame control
+
+  let mimeType = 'video/webm;codecs=vp9'
+  if (!MediaRecorder.isTypeSupported(mimeType)) {
+    mimeType = 'video/webm;codecs=vp8'
+    if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/webm'
+  }
+
+  const mediaRecorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 4_000_000 })
+  const chunks: Blob[] = []
+  mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data) }
+
+  const encodingDone = new Promise<void>(resolve => {
+    mediaRecorder.onstop = () => resolve()
+  })
+
+  mediaRecorder.start()
+
+  try {
+    for (let i = 0; i < capturedFrames.length; i++) {
+      if (videoCancelled) break
+
+      const pct = (50 + ((i + 1) / capturedFrames.length * 50)).toFixed(0) // Phase 2 = 50-100%
+      progressBar.style.width = `${pct}%`
+      progressPct.textContent = `${pct}%`
+
+      // Update timeline playhead during encoding
+      timelinePlayheadSec = capturedFrames[i].globalTimeSec
+      renderGlobalTimeline()
+
+      // Draw cached image to canvas
+      try {
+        const img = await loadImage(capturedFrames[i].dataUrl)
+        const imgAspect = img.width / img.height
+        const canvasAspect = canvas.width / canvas.height
+        let drawW = canvas.width, drawH = canvas.height, drawX = 0, drawY = 0
+        if (imgAspect > canvasAspect) {
+          drawH = canvas.width / imgAspect
+          drawY = (canvas.height - drawH) / 2
+        } else {
+          drawW = canvas.height * imgAspect
+          drawX = (canvas.width - drawW) / 2
+        }
+        ctx.fillStyle = '#fff'
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+        ctx.drawImage(img, drawX, drawY, drawW, drawH)
+      } catch (e) {
+        console.warn(`[FootprintLab] Encode frame ${i + 1} draw failed:`, e)
+        continue
+      }
+
+      // Push frame to encoder
+      const track = stream.getVideoTracks()[0] as any
+      if (track.requestFrame) track.requestFrame()
+
+      // Hold for exactly the target frame duration
+      await new Promise(r => setTimeout(r, frameDurationMs))
+    }
+
+    // Hold last frame briefly for encoder flush
+    await new Promise(r => setTimeout(r, Math.max(100, frameDurationMs)))
+  } finally {
+    mediaRecorder.stop()
+  }
+
+  await encodingDone
+
+  // Clear playhead
+  timelinePlayheadSec = -1
+  renderGlobalTimeline()
+
+  if (!videoCancelled && chunks.length > 0) {
+    videoBlob = new Blob(chunks, { type: 'video/webm' })
+    downloadBtn.style.display = 'block'
+    progressText.textContent = `Done — ${capturedFrames.length} frames, ${targetFps.toFixed(1)} fps, ${(videoBlob.size / 1024).toFixed(0)} KB`
+    setStatus('Video recorded successfully')
+    client.notify('Video recording complete', 'success')
+  } else {
+    progressText.textContent = 'Cancelled'
+  }
+
+  videoRecording = false
+  cancelBtn.style.display = 'none'
+  recordBtn.style.display = 'block'
+  recordBtn.style.flex = '1'
+}
+
+function cancelRecording() { videoCancelled = true }
+
+function downloadVideo() {
+  if (!videoBlob) return
+  const url = URL.createObjectURL(videoBlob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `scene-animation-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.webm`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+
+// =============================================================================
+// STATIC EXPORT
+// =============================================================================
 
 let selectedExportFormat = 'svg'
 
@@ -940,606 +1984,31 @@ async function exportScene() {
 
 
 // =============================================================================
-// VIDEO GENERATION ENGINE
-// =============================================================================
-// Host-based scene capture: for each frame, places a single vehicle on the path,
-// captures the full host-rendered scene (all lanes, objects, styles) as PNG via
-// the ext:export-request protocol, draws it to a <canvas>, and uses MediaRecorder
-// for WebM output. Variable frame timing preserved via per-frame hold durations.
+// EXPOSE TO WINDOW (for inline onclick handlers)
 // =============================================================================
 
-interface FrameSpec {
-  index: number
-  tValue: number            // position on path [0, 1]
-  realTimeSec: number       // absolute real-world timestamp
-  displayDurationSec: number // how long to hold this frame in video
-}
-
-interface VideoSettings {
-  targetDurationSec: number
-}
-
-let videoSettings: VideoSettings = {
-  targetDurationSec: 10,
-}
-
-let videoBlob: Blob | null = null
-let videoRecording = false
-let videoCancelled = false
-
-// --- Frame spec computation ---
-
-function computeFrameSpecs(targetDurationSec: number): FrameSpec[] | { error: string } {
-  if (footprints.length === 0) return { error: 'No participants to animate' }
-  if (targetDurationSec <= 0) return { error: 'Duration must be positive' }
-
-  const sorted = [...footprints].map((f, i) => ({ t: f.t, origIdx: i })).sort((a, b) => a.t - b.t)
-
-  // If segments exist, use real timing from segment pipeline
-  if (segments.length > 0) {
-    const result = runSegmentPipeline(segments)
-    if ('error' in result) return result
-
-    const { segmentsComputed, totalDurationSec: realDurationSec } = result
-    const playbackSpeed = realDurationSec / targetDurationSec
-
-    const realTimestamps: number[] = []
-    for (let si = 0; si < segmentsComputed.length; si++) {
-      const seg = segmentsComputed[si]
-      for (let j = 1; j <= seg.numSamples; j++) {
-        realTimestamps.push(seg.timeStartSec + j * seg.intervalSec)
-      }
-    }
-
-    const frameCount = Math.min(sorted.length, realTimestamps.length)
-    const frames: FrameSpec[] = []
-
-    for (let i = 0; i < frameCount; i++) {
-      const prevTime = i === 0 ? 0 : realTimestamps[i - 1]
-      const realInterval = realTimestamps[i] - prevTime
-      frames.push({
-        index: i,
-        tValue: sorted[i].t,
-        realTimeSec: realTimestamps[i],
-        displayDurationSec: realInterval / playbackSpeed,
-      })
-    }
-
-    return frames
-  }
-
-  // Manual mode: equal timing
-  const frameDuration = targetDurationSec / sorted.length
-  return sorted.map((fp, i) => ({
-    index: i,
-    tValue: fp.t,
-    realTimeSec: (i + 1) * frameDuration,
-    displayDurationSec: frameDuration,
-  }))
-}
-
-
-// =============================================================================
-// HOST SCENE CAPTURE
-// =============================================================================
-
-/**
- * Captures the current host-rendered scene as a PNG data URL.
- * Uses the ext:export-request postMessage protocol with returnData: true.
- */
-async function captureHostFrame(): Promise<string> {
-  const requestId = 'frame_' + (++idCounter) + '_' + Date.now().toString(36)
-  return new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      window.removeEventListener('message', handler)
-      reject(new Error('Host frame capture timed out'))
-    }, 10000)
-
-    function handler(event: MessageEvent) {
-      const data = event.data
-      if (!data || typeof data !== 'object') return
-      if (data.type === 'ext:export-response' && data.payload?.requestId === requestId) {
-        window.removeEventListener('message', handler)
-        clearTimeout(timeout)
-        if (data.payload.data) {
-          resolve(data.payload.data as string)
-        } else {
-          reject(new Error('No data in export response'))
-        }
-      }
-      if (data.type === 'ext:error' && data.payload?.requestId === requestId) {
-        window.removeEventListener('message', handler)
-        clearTimeout(timeout)
-        reject(new Error(data.payload.message || 'Export error'))
-      }
-    }
-
-    window.addEventListener('message', handler)
-    window.parent.postMessage({
-      type: 'ext:export-request',
-      payload: { requestId, format: 'png', returnData: true },
-    }, '*')
-  })
-}
-
-/**
- * Load a data URL into an HTMLImageElement.
- */
-function loadImage(dataUrl: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.onload = () => resolve(img)
-    img.onerror = () => reject(new Error('Failed to load image'))
-    img.src = dataUrl
-  })
-}
-
-/**
- * Build a single vehicle/pedestrian shape at the given path evaluation result.
- */
-function buildFrameShape(ev: PathEvalResult, pathId: string): BaseShape {
-  const shapeType = selectedTemplate.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
-  const attrType = selectedTemplate.type === 'pedestrian' ? 'pedestrian' : 'vehicle'
-  const attrSubtype = selectedTemplate.type === 'pedestrian' ? 'person' : 'car'
-  return {
-    id: nextId('vfr'), type: shapeType,
-    x: ev.position.x, y: ev.position.y, rotation: ev.tangentAngleDeg,
-    zIndex: shapeType === 'pedestrian' ? 3000 : 4000,
-    props: {
-      w: selectedTemplate.w, h: selectedTemplate.h,
-      color: 'black', size: 'm', opacity: 1,
-      attributes: { type: attrType, subtype: attrSubtype },
-      osmId: '', templateId: selectedTemplate.id, parentPathId: pathId,
-    },
-  }
-}
-
-/**
- * Clear all placed participant shapes, place a single shape at the given t-value,
- * wait for host to render, capture the scene as PNG. Then clean up the temp shape.
- * Returns the captured data URL.
- */
-async function captureFrameAtPosition(tValue: number): Promise<string> {
-  if (!selectedPathId || selectedPathPoints.length < 2) throw new Error('No path selected')
-
-  // 1. Clear existing placed shapes
-  await clearPlacedShapes()
-  await new Promise(r => setTimeout(r, 100))
-
-  // 1b. Re-fetch path coordinates (guards against canvas pan/zoom since last call)
-  try {
-    const freshShapes = await client.requestShapes({ ids: [selectedPathId] })
-    const freshPath = freshShapes.find(s => s.id === selectedPathId)
-    if (freshPath) {
-      const dp = freshPath.props._displayPoints as Point2D[] | undefined
-      if (dp && dp.length >= 2) selectedPathPoints = dp
-    }
-  } catch (e) {
-    console.warn('[FootprintLab] Preview path refresh failed, using cached:', e)
-  }
-
-  // 2. Place single shape at this t-value
-  const ev = evaluatePathAt(selectedPathPoints, tValue)
-  const shape = buildFrameShape(ev, selectedPathId)
-  client.addShapes([shape])
-
-  // 3. Wait for host to render the new shape
-  await new Promise(r => setTimeout(r, 350))
-
-  // 4. Capture the full scene from host
-  const dataUrl = await captureHostFrame()
-
-  // 5. Clean up the temp shape
-  client.deleteShapes([shape.id])
-  await new Promise(r => setTimeout(r, 100))
-
-  return dataUrl
-}
-
-
-// =============================================================================
-// PREVIEW (debounced host capture on scrub)
-// =============================================================================
-
-let previewDebounceTimer: ReturnType<typeof setTimeout> | null = null
-let previewBusy = false
-
-function showCaptureSpinner(show: boolean) {
-  const spinner = document.getElementById('vid-capture-spinner')
-  if (spinner) spinner.style.display = show ? 'flex' : 'none'
-}
-
-async function renderPreview(frameIndex?: number) {
-  if (footprints.length === 0 || selectedPathPoints.length < 2) return
-  if (!isPlaced) return // need shapes placed first for meaningful preview
-  if (videoRecording) return // don't interfere with active recording
-
-  const specs = computeFrameSpecs(videoSettings.targetDurationSec)
-  if ('error' in specs || specs.length === 0) return
-
-  const idx = frameIndex ?? Math.min(Math.floor(specs.length / 3), specs.length - 1)
-  const frame = specs[Math.min(idx, specs.length - 1)]
-
-  if (previewBusy) return
-  previewBusy = true
-  showCaptureSpinner(true)
-
-  try {
-    // Capture host scene with single vehicle at frame position
-    const dataUrl = await captureFrameAtPosition(frame.tValue)
-
-    // Draw captured image to preview canvas
-    const canvas = document.getElementById('vid-canvas') as HTMLCanvasElement
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    const img = await loadImage(dataUrl)
-    // Scale to fit canvas while preserving aspect ratio
-    const imgAspect = img.width / img.height
-    const canvasAspect = canvas.width / canvas.height
-    let drawW = canvas.width, drawH = canvas.height, drawX = 0, drawY = 0
-    if (imgAspect > canvasAspect) {
-      drawH = canvas.width / imgAspect
-      drawY = (canvas.height - drawH) / 2
-    } else {
-      drawW = canvas.height * imgAspect
-      drawX = (canvas.width - drawW) / 2
-    }
-    ctx.fillStyle = '#fff'
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-    ctx.drawImage(img, drawX, drawY, drawW, drawH)
-
-    // Restore all footprints after preview capture
-    await fullRePlaceShapes()
-  } catch (e) {
-    console.warn('[FootprintLab] Preview capture error:', e)
-    // Restore footprints even on error
-    try { await fullRePlaceShapes() } catch {}
-  } finally {
-    previewBusy = false
-    showCaptureSpinner(false)
-  }
-}
-
-function debouncedPreview(frameIndex: number) {
-  if (previewDebounceTimer) clearTimeout(previewDebounceTimer)
-  previewDebounceTimer = setTimeout(() => { previewDebounceTimer = null; renderPreview(frameIndex) }, 500)
-}
-
-
-// =============================================================================
-// VIDEO UI STATE
-// =============================================================================
-
-function updateVideoUI() {
-  const needsEl = document.getElementById('video-needs-footprints')!
-  const controlsEl = document.getElementById('video-controls')!
-
-  if (footprints.length === 0) {
-    needsEl.style.display = 'block'
-    controlsEl.style.display = 'none'
-  } else {
-    needsEl.style.display = 'none'
-    controlsEl.style.display = 'block'
-    onVideoSettingsChange()
-  }
-}
-
-function onVideoSettingsChange() {
-  const dur = parseFloat((document.getElementById('vid-duration') as HTMLInputElement).value) || 10
-  videoSettings.targetDurationSec = dur
-
-  const specs = computeFrameSpecs(dur)
-  const countEl = document.getElementById('vid-frame-count')!
-  const speedEl = document.getElementById('vid-playback-speed')!
-  const fpsEl = document.getElementById('vid-fps-range')!
-
-  if ('error' in specs) {
-    countEl.textContent = '—'
-    speedEl.textContent = specs.error
-    fpsEl.textContent = '—'
-    return
-  }
-
-  countEl.textContent = `${specs.length}`
-
-  // Compute playback speed
-  if (segments.length > 0) {
-    const result = runSegmentPipeline(segments)
-    if (!('error' in result)) {
-      const ps = result.totalDurationSec / dur
-      speedEl.textContent = `${ps.toFixed(1)}×`
-
-      const durations = specs.map(f => f.displayDurationSec).filter(d => d > 0)
-      const minDur = Math.min(...durations)
-      const maxDur = Math.max(...durations)
-      const maxFps = (1 / minDur).toFixed(1)
-      const minFps = (1 / maxDur).toFixed(1)
-      fpsEl.textContent = minFps === maxFps ? `${maxFps} fps` : `${minFps}–${maxFps} fps`
-    }
-  } else {
-    const ps = dur > 0 ? `${(1).toFixed(1)}×` : '—'
-    speedEl.textContent = ps
-    const fps = specs.length > 0 ? (specs.length / dur).toFixed(1) : '—'
-    fpsEl.textContent = `${fps} fps (uniform)`
-  }
-
-  // Update scrubber range
-  const scrubEl = document.getElementById('vid-scrub') as HTMLInputElement
-  const scrubMaxEl = document.getElementById('vid-scrub-max')!
-  if (scrubEl && scrubMaxEl) {
-    const maxIdx = Math.max(0, specs.length - 1)
-    scrubEl.max = String(maxIdx)
-    if (parseInt(scrubEl.value) > maxIdx) scrubEl.value = String(maxIdx)
-    scrubMaxEl.textContent = String(specs.length)
-  }
-}
-
-function onScrubChange() {
-  const scrubEl = document.getElementById('vid-scrub') as HTMLInputElement
-  if (!scrubEl) return
-  const idx = parseInt(scrubEl.value) || 0
-  debouncedPreview(idx)
-}
-
-
-// =============================================================================
-// RECORDING — Host-based scene capture per frame
-// =============================================================================
-// FIX: Each frame now re-fetches _displayPoints from the host before computing
-// the vehicle position. This makes each frame independently correct ("idempotent
-// frame capture") even if the user pans, zooms, or moves the canvas mid-recording.
-// =============================================================================
-
-async function recordVideo() {
-  if (footprints.length === 0) { setStatus('No participants to animate'); return }
-  if (selectedPathPoints.length < 2) { setStatus('Select a path first'); return }
-  if (!selectedPathId) { setStatus('Select a path first'); return }
-
-  onVideoSettingsChange()
-
-  const specs = computeFrameSpecs(videoSettings.targetDurationSec)
-  if ('error' in specs) { setStatus(`Error: ${specs.error}`); return }
-  if (specs.length === 0) { setStatus('No frames to record'); return }
-
-  videoRecording = true
-  videoCancelled = false
-  videoBlob = null
-
-  const canvas = document.getElementById('vid-canvas') as HTMLCanvasElement
-  const ctx = canvas.getContext('2d')!
-  const recordBtn = document.getElementById('vid-record-btn')!
-  const cancelBtn = document.getElementById('vid-cancel-btn')!
-  const downloadBtn = document.getElementById('vid-download-btn')!
-  const progressWrap = document.getElementById('vid-progress-wrap')!
-  const progressBar = document.getElementById('vid-progress-bar')!
-  const progressText = document.getElementById('vid-progress-text')!
-  const progressPct = document.getElementById('vid-progress-pct')!
-
-  recordBtn.style.display = 'none'
-  cancelBtn.style.display = 'inline-block'
-  downloadBtn.style.display = 'none'
-  progressWrap.style.display = 'block'
-  progressBar.style.width = '0%'
-  progressText.textContent = 'Preparing…'
-  progressPct.textContent = '0%'
-
-  // Start MediaRecorder on canvas stream
-  const stream = canvas.captureStream(0) // 0 = manual frame capture
-
-  let mimeType = 'video/webm;codecs=vp9'
-  if (!MediaRecorder.isTypeSupported(mimeType)) {
-    mimeType = 'video/webm;codecs=vp8'
-    if (!MediaRecorder.isTypeSupported(mimeType)) {
-      mimeType = 'video/webm'
-    }
-  }
-
-  const mediaRecorder = new MediaRecorder(stream, {
-    mimeType,
-    videoBitsPerSecond: 4_000_000, // higher bitrate for host-rendered PNGs
-  })
-
-  const chunks: Blob[] = []
-  mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data) }
-
-  mediaRecorder.onstop = () => {
-    if (!videoCancelled && chunks.length > 0) {
-      videoBlob = new Blob(chunks, { type: 'video/webm' })
-      downloadBtn.style.display = 'block'
-      progressText.textContent = `Done — ${specs.length} frames, ${(videoBlob.size / 1024).toFixed(0)} KB`
-      setStatus('Video recorded successfully')
-      client.notify('Video recording complete', 'success')
-    } else {
-      progressText.textContent = 'Cancelled'
-    }
-    videoRecording = false
-    cancelBtn.style.display = 'none'
-    recordBtn.style.display = 'block'
-    recordBtn.style.flex = '1'
-  }
-
-  mediaRecorder.start()
-
-  const pathId = selectedPathId
-
-  try {
-    // Initial path fetch (seed value; each frame will re-fetch below)
-    const freshShapes = await client.requestShapes({ ids: [pathId] })
-    const freshPath = freshShapes.find(s => s.id === pathId)
-    if (freshPath) {
-      const dp = freshPath.props._displayPoints as Point2D[] | undefined
-      if (dp && dp.length >= 2) selectedPathPoints = dp
-    }
-
-    for (let i = 0; i < specs.length; i++) {
-      if (videoCancelled) break
-
-      const frame = specs[i]
-      const pct = ((i + 1) / specs.length * 100).toFixed(0)
-      progressBar.style.width = `${pct}%`
-      progressPct.textContent = `${pct}%`
-      progressText.textContent = `Capturing frame ${i + 1}/${specs.length}…`
-
-      // 1. Clear all placed footprints from canvas
-      await clearPlacedShapes()
-      if (videoCancelled) break
-      await new Promise(r => setTimeout(r, 80))
-
-      // 1b. Re-fetch path coordinates (guards against canvas pan/zoom mid-recording)
-      //     Each frame is independently correct regardless of prior state.
-      try {
-        const framePathShapes = await client.requestShapes({ ids: [pathId] })
-        const framePath = framePathShapes.find(s => s.id === pathId)
-        if (framePath) {
-          const dp = framePath.props._displayPoints as Point2D[] | undefined
-          if (dp && dp.length >= 2) selectedPathPoints = dp
-        }
-      } catch (e) {
-        console.warn(`[FootprintLab] Frame ${i + 1} path refresh failed, using cached:`, e)
-      }
-      if (videoCancelled) break
-
-      // 2. Place single vehicle at this frame's position
-      const ev = evaluatePathAt(selectedPathPoints, frame.tValue)
-      const shape = buildFrameShape(ev, pathId)
-      client.addShapes([shape])
-
-      // 3. Wait for host to render the new shape
-      await new Promise(r => setTimeout(r, 350))
-      if (videoCancelled) { client.deleteShapes([shape.id]); break }
-
-      // 4. Capture the full scene from host as PNG
-      let dataUrl: string
-      try {
-        dataUrl = await captureHostFrame()
-      } catch (e) {
-        console.warn(`[FootprintLab] Frame ${i + 1} capture failed:`, e)
-        client.deleteShapes([shape.id])
-        continue
-      }
-
-      // 5. Remove temp shape
-      client.deleteShapes([shape.id])
-
-      // 6. Draw captured image to canvas
-      try {
-        const img = await loadImage(dataUrl)
-        const imgAspect = img.width / img.height
-        const canvasAspect = canvas.width / canvas.height
-        let drawW = canvas.width, drawH = canvas.height, drawX = 0, drawY = 0
-        if (imgAspect > canvasAspect) {
-          drawH = canvas.width / imgAspect
-          drawY = (canvas.height - drawH) / 2
-        } else {
-          drawW = canvas.height * imgAspect
-          drawX = (canvas.width - drawW) / 2
-        }
-        ctx.fillStyle = '#fff'
-        ctx.fillRect(0, 0, canvas.width, canvas.height)
-        ctx.drawImage(img, drawX, drawY, drawW, drawH)
-      } catch (e) {
-        console.warn(`[FootprintLab] Frame ${i + 1} draw failed:`, e)
-        continue
-      }
-
-      // 7. Capture the canvas frame to the MediaRecorder stream
-      const track = stream.getVideoTracks()[0] as any
-      if (track.requestFrame) track.requestFrame()
-
-      // 8. Hold for the correct duration (variable timing)
-      const holdMs = Math.max(33, frame.displayDurationSec * 1000)
-      await new Promise(r => setTimeout(r, holdMs))
-    }
-
-    // Hold last frame briefly
-    if (!videoCancelled) {
-      await new Promise(r => setTimeout(r, 500))
-    }
-  } finally {
-    mediaRecorder.stop()
-    // Restore all footprints after recording
-    progressText.textContent = 'Restoring scene…'
-    try { await fullRePlaceShapes() } catch {}
-  }
-}
-
-function cancelRecording() {
-  videoCancelled = true
-}
-
-function downloadVideo() {
-  if (!videoBlob) return
-  const url = URL.createObjectURL(videoBlob)
-  const a = document.createElement('a')
-  a.href = url
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-  a.download = `path-animation-${timestamp}.webm`
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
-}
-
-
-// =============================================================================
-// EXPOSE TO WINDOW
-// =============================================================================
-
-;(window as any).refreshSelection = refreshSelection
-;(window as any).addFootprint = addFootprint
-;(window as any).removeLastFootprint = removeLastFootprint
-;(window as any).placeParticipants = placeParticipants
-;(window as any).updateParticipantPositions = updateParticipantPositions
-;(window as any).clearFootprints = clearFootprints
-;(window as any).exportScene = exportScene
-;(window as any).renderFootprintList = renderFootprintList
-;(window as any).switchMode = switchMode
 ;(window as any).addSegment = addSegment
-;(window as any).generateFromSimulation = generateFromSimulation
+;(window as any).onSegModeChange = onSegModeChange
+;(window as any).generateParticipants = generateParticipants
+;(window as any).placeActivePathParticipants = placeActivePathParticipants
+;(window as any).placeAllPaths = placeAllPaths
+;(window as any).clearActivePath = clearActivePath
+;(window as any).applySceneSettings = applySceneSettings
+;(window as any).applyPathSettings = applyPathSettings
+;(window as any).onStartOffsetChange = applyPathSettings  // alias for backward compat
+;(window as any).calibrateFromPath = calibrateFromPath
+;(window as any).exportSceneJSON = exportSceneJSON
+;(window as any).importSceneJSON = importSceneJSON
+;(window as any).exportScene = exportScene
 ;(window as any).onVideoSettingsChange = onVideoSettingsChange
-;(window as any).onScrubChange = onScrubChange
 ;(window as any).recordVideo = recordVideo
 ;(window as any).cancelRecording = cancelRecording
 ;(window as any).downloadVideo = downloadVideo
 
-Object.defineProperty(window, 'selectedPathPoints', { get: () => selectedPathPoints })
-Object.defineProperty(window, 'selectedPathId', { get: () => selectedPathId })
-Object.defineProperty(window, 'footprints', { get: () => footprints, set: (v) => { footprints.length = 0; footprints.push(...v) } })
-Object.defineProperty(window, 'pathStateMap', { get: () => pathStateMap })
-Object.defineProperty(window, 'placedShapeIds', { get: () => placedShapeIds })
-Object.defineProperty(window, 'segments', { get: () => segments })
-
-
-// =============================================================================
-// AUTO-DETECT SELECTION
-// =============================================================================
-
-let lastSelectionId: string | null = null
-let deselectionGraceTimer: ReturnType<typeof setTimeout> | null = null
-
-async function pollSelection() {
-  try {
-    const selection = await client.requestSelection()
-    const currentId = selection.ids.length > 0 ? selection.ids[0] : null
-    if (currentId !== lastSelectionId) {
-      lastSelectionId = currentId
-      if (currentId) {
-        if (deselectionGraceTimer) { clearTimeout(deselectionGraceTimer); deselectionGraceTimer = null }
-        const shapes = await client.requestShapes({ ids: [currentId] })
-        const path = shapes.find(s => s.type === 'linestring' && s.props.isPath)
-        if (path) { if (path.id !== selectedPathId) await refreshSelection() }
-      } else {
-        if (!deselectionGraceTimer && selectedPathId) {
-          deselectionGraceTimer = setTimeout(() => {
-            deselectionGraceTimer = null
-            if (lastSelectionId === null) { saveCurrentPathState(); selectedPathId = null; selectedPathPoints = []; showPanel(false) }
-          }, 600)
-        }
-      }
-    }
-  } catch { /* ignore */ }
-}
+Object.defineProperty(window, 'scene', { get: () => scene })
+Object.defineProperty(window, 'activePathId', { get: () => activePathId })
+Object.defineProperty(window, 'globalSamplingRate', { get: () => globalSamplingRate, set: (v: number) => { globalSamplingRate = v } })
+Object.defineProperty(window, 'metersPerCanvasUnit', { get: () => metersPerCanvasUnit, set: (v: number) => { metersPerCanvasUnit = v } })
 
 
 // =============================================================================
@@ -1549,11 +2018,10 @@ async function pollSelection() {
 async function main() {
   client = new ExtensionClient('path-footprint-lab')
   const init = await client.waitForInit()
-  console.log('Path Footprint Lab connected:', init.grantedCapabilities)
-  showPanel(false)
-  renderTemplateGrid()
-  renderFootprintList()
+  console.log('Path Footprint Lab (multi-path) connected:', init.grantedCapabilities)
   initFormatButtons()
+  initJSONDropZone()
+  renderAll()
   setInterval(pollSelection, 500)
 }
 
