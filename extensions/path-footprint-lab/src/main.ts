@@ -1396,29 +1396,41 @@ async function pollSelection() {
 // =============================================================================
 
 interface SceneJSON {
-  version: 1
+  version: 2
   globalSamplingRate: number
   metersPerCanvasUnit: number
   paths: Array<{
     pathId: string
     label: string
+    color: string
     startOffsetSec: number
     templateId: string
     segments: SpeedSegment[]
+    // Geometry snapshot — used as fallback if path not found on canvas
+    displayPoints: Point2D[]
+    canvasArcLength: number
+    // Pre-computed participants — skip re-generation on import
+    participants: LocalParticipant[]
+    localDurationSec: number
   }>
 }
 
 function exportSceneJSON() {
   const data: SceneJSON = {
-    version: 1,
+    version: 2,
     globalSamplingRate,
     metersPerCanvasUnit,
     paths: scene.map(pc => ({
       pathId: pc.pathId,
       label: pc.label,
+      color: pc.color,
       startOffsetSec: pc.startOffsetSec,
       templateId: pc.templateId,
       segments: pc.segments.map(s => ({ ...s })),
+      displayPoints: pc.displayPoints,
+      canvasArcLength: totalArcLength(pc.displayPoints),
+      participants: pc.participants.map(p => ({ t: p.t, localTimeSec: p.localTimeSec })),
+      localDurationSec: pc.localDurationSec,
     })),
   }
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
@@ -1440,40 +1452,52 @@ async function importSceneJSON(input: HTMLInputElement) {
     const text = await file.text()
     const data = JSON.parse(text) as SceneJSON
 
-    if (!data.version || !Array.isArray(data.paths)) {
+    if ((!data.version && !Array.isArray(data.paths)) || !Array.isArray(data.paths)) {
       setStatus('Invalid scene JSON'); return
     }
 
-    // Restore global sampling rate if present
+    // Restore global settings
     if (typeof data.globalSamplingRate === 'number' && data.globalSamplingRate > 0) {
       globalSamplingRate = data.globalSamplingRate
     }
-
-    // Restore canvas scale if present
     if (typeof data.metersPerCanvasUnit === 'number' && data.metersPerCanvasUnit > 0) {
       metersPerCanvasUnit = data.metersPerCanvasUnit
     }
 
-    let imported = 0, skipped = 0
+    let imported = 0, skipped = 0, fromCanvas = 0, fromJSON = 0
 
     for (const entry of data.paths) {
       try {
-        // Verify path exists on canvas
-        const shapes = await client.requestShapes({ ids: [entry.pathId] })
-        const path = shapes.find(s => s.type === 'linestring' && s.props.isPath)
-        if (!path) { skipped++; continue }
-
-        const dp = path.props._displayPoints as Point2D[] | undefined
         let points: Point2D[] = []
-        if (dp && dp.length >= 2) {
-          points = dp
-        } else {
-          const pointIds = path.props.pointIds as string[]
-          const allShapes = await client.requestShapes({ ids: pointIds })
-          points = pointIds.map(pid => {
-            const pt = allShapes.find(s => s.id === pid)
-            return pt ? { x: pt.x, y: pt.y } : { x: 0, y: 0 }
-          }).filter(p => p.x !== 0 || p.y !== 0)
+        let foundOnCanvas = false
+
+        // Try to find path on canvas first (fresh geometry)
+        try {
+          const shapes = await client.requestShapes({ ids: [entry.pathId] })
+          const path = shapes.find(s => s.type === 'linestring' && s.props.isPath)
+          if (path) {
+            const dp = path.props._displayPoints as Point2D[] | undefined
+            if (dp && dp.length >= 2) {
+              points = dp
+              foundOnCanvas = true
+            } else {
+              const pointIds = path.props.pointIds as string[]
+              const allShapes = await client.requestShapes({ ids: pointIds })
+              points = pointIds.map(pid => {
+                const pt = allShapes.find(s => s.id === pid)
+                return pt ? { x: pt.x, y: pt.y } : { x: 0, y: 0 }
+              }).filter(p => p.x !== 0 || p.y !== 0)
+              if (points.length >= 2) foundOnCanvas = true
+            }
+          }
+        } catch { /* canvas lookup failed — try fallback */ }
+
+        // Fallback to stored geometry from JSON
+        if (!foundOnCanvas && Array.isArray(entry.displayPoints) && entry.displayPoints.length >= 2) {
+          points = entry.displayPoints
+          fromJSON++
+        } else if (foundOnCanvas) {
+          fromCanvas++
         }
 
         if (points.length < 2) { skipped++; continue }
@@ -1482,17 +1506,29 @@ async function importSceneJSON(input: HTMLInputElement) {
         config.startOffsetSec = entry.startOffsetSec ?? 0
         config.templateId = entry.templateId ?? 'sedan'
         config.segments = (entry.segments ?? []).map(s => ({ ...s }))
+        config.localDurationSec = entry.localDurationSec ?? 0
 
-        // Auto-generate participants if segments exist
-        const pathLen = getPathLength(config)
-        if (config.segments.length > 0 && pathLen > 0) {
-          const result = runSegmentPipeline(config.segments, globalSamplingRate, pathLen)
-          if (!('error' in result)) {
-            config.participants = result.tValues.map((t, i) => ({
-              t: parseFloat(t.toFixed(4)),
-              localTimeSec: result.localTimestamps[i],
-            }))
-            config.localDurationSec = result.totalDurationSec
+        // Restore color if provided
+        if (entry.color) config.color = entry.color
+
+        // Restore pre-computed participants directly (skip re-generation)
+        if (Array.isArray(entry.participants) && entry.participants.length > 0) {
+          config.participants = entry.participants.map(p => ({
+            t: p.t,
+            localTimeSec: p.localTimeSec,
+          }))
+        } else if (config.segments.length > 0) {
+          // v1 JSON without participants — re-generate
+          const pathLen = getPathLength(config)
+          if (pathLen > 0) {
+            const result = runSegmentPipeline(config.segments, globalSamplingRate, pathLen)
+            if (!('error' in result)) {
+              config.participants = result.tValues.map((t, i) => ({
+                t: parseFloat(t.toFixed(4)),
+                localTimeSec: result.localTimestamps[i],
+              }))
+              config.localDurationSec = result.totalDurationSec
+            }
           }
         }
 
@@ -1508,7 +1544,11 @@ async function importSceneJSON(input: HTMLInputElement) {
     }
 
     renderAll()
-    const msg = `Imported ${imported} path(s)${skipped > 0 ? `, ${skipped} skipped (not found on canvas)` : ''}`
+    const parts: string[] = [`Imported ${imported} path(s)`]
+    if (fromCanvas > 0) parts.push(`${fromCanvas} from canvas`)
+    if (fromJSON > 0) parts.push(`${fromJSON} from stored geometry`)
+    if (skipped > 0) parts.push(`${skipped} skipped`)
+    const msg = parts.join(', ')
     setStatus(msg)
     client.notify(msg, imported > 0 ? 'success' : 'error')
   } catch (e) {
